@@ -1,0 +1,25 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# Local environments and caches
+.venv/
+.conda-env/
+.cache/
+.mplconfig/
+
+# Frontend dependencies/builds
+frontend/node_modules/
+frontend/dist/
+
+# Training outputs
+runs/
+
+# Editors
+.idea/
+.vscode/
