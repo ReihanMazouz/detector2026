@@ -4,21 +4,37 @@
 __pycache__/
 *.py[cod]
 *.so
+.Python
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+.ipynb_checkpoints/
 
 # Local environments and caches
 .venv/
 .conda-env/
 .cache/
 .mplconfig/
+.env
+.env.*
+.python-version
 
 # Frontend dependencies/builds
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
 
 # Training outputs
 runs/
+outputs/
+logs/
+*.log
 
 # Editors
 .idea/
