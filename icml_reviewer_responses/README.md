@@ -12,6 +12,5 @@ Ce dossier contient une reponse par reviewer au format Markdown.
 - [Glossary](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/glossary.md)
 - [Row-Normalized Confusion Matrices](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/confusion_matrices_row_normalized.md)
 - [Waveform Descriptions](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/waveform_descriptions.md)
-- [Waveform Descriptions LaTeX Table](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/waveform_descriptions_table_latex.md)
 
 Les fichiers sont en Markdown et peuvent contenir du LaTeX inline ou en blocs.
