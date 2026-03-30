@@ -12,9 +12,7 @@ The revised formulation and specification of the Oracle-OR should address most o
 
 ### Q5
 
-The reviewer correctly states that a fusion model should not outperform a true instance-level oracle unless it extracts additional information beyond what is present in individual models. This is precisely the phenomenon we aim to highlight. The proposed model does not simply select the best detection across resolutions; it jointly exploits multi-resolution representations.
-
-In particular, the model benefits from observing the same signal at multiple time-frequency resolutions, improving confidence calibration. This can reduce false alarms, or, at a fixed false alarm rate (FAR), increase detection probability. Moreover, the experiment on Dataset C explicitly demonstrates that the model can leverage inter-resolution correlations to discriminate between waveform patterns that are intentionally indistinguishable at a single resolution.
+The reviewer correctly states that a fusion model should not outperform a true instance-level oracle unless it extracts additional information beyond what is present in individual models. This is precisely the phenomenon we aim to highlight: the proposed model benefits from observing the same signal at multiple time-frequency resolutions, which improves confidence calibration. This can reduce false alarms, or, at a fixed false alarm rate (FAR), increase detection probability. Moreover, the experiment on Dataset C explicitly demonstrates that the model can leverage inter-resolution correlations to discriminate between waveform patterns that are intentionally indistinguishable at a single resolution.
 
 ### Q11 and Q12
 

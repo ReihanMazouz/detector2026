@@ -2,7 +2,7 @@
 
 We thank the reviewer for their careful reading and constructive feedback.
 
-## Weakness 1: Evaluation limited to private/generated datasets
+## Weakness 1
 
 We agree that evaluating on public datasets would strengthen the paper.
 
@@ -14,7 +14,7 @@ To address this limitation more meaningfully, we include in the revised version 
 
 - *Ocean Networks Canada (ONC) hydrophone dataset*, publicly available and annotated for marine mammal detection [1].
 
-This dataset consists of real signals collected in uncontrolled environments, which significantly differ from radar data, thereby demonstrating the generality and robustness of our approach.
+This dataset consists of real signals thereby demonstrating the generality and robustness of our approach.
 
 The results are summarized in the Table below. MRS-YOLO consistently outperforms all single-resolution baselines, particularly under degradation conditions.
 
@@ -31,11 +31,11 @@ An extended version of these results is provided here: [real_acoustic_data_resul
 
 **This additional experiment represents a significant contribution to the revised version of the paper, as it demonstrates that our model is able to maintain superior performance in a fundamentally different setting involving real-world data.**
 
-## Weakness 2: Missing visualization for the reported +64.2% gain
+## Weakness 2
 
-We acknowledge that the absence of a corresponding visualization makes this result difficult to assess. In the revised version, it will be included. Those can be found here: [confusion_matrices_row_normalized.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/confusion_matrices_row_normalized.md).
+The corresponding visualization will be included in the revised version. It can be found here: [confusion_matrices_row_normalized.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/confusion_matrices_row_normalized.md).
 
-## Weakness 3: Lack of definition of signal classes
+## Weakness 3
 
 We agree that introducing signal classes only as acronyms reduces clarity. A detailed description of each waveform will be provided in the **appendix**. It can be found here: [waveform_descriptions.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/waveform_descriptions.md).
 

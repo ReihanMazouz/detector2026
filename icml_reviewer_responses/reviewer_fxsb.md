@@ -8,17 +8,11 @@ See the response to reviewer 2hiN as well as the standalone note [real_acoustic_
 
 ## W2 and Key Question 1. Evaluation baselines (decision-level ensemble vs Oracle)
 
-We agree that a decision-level ensemble (e.g., merging predictions from multiple single-resolution YOLO models via NMS) would constitute a more practical baseline. The most direct way to address this would be to reference a recent accepted work (ICASSP 2026) where such a strategy is explored, however, citing this work at this stage would compromise the double-blind review process.
+We agree that a decision-level ensemble (e.g., merging predictions from multiple single-resolution YOLO models via NMS) would constitute a more practical baseline. The most direct way to address this would be to reference a recent accepted work (ICASSP 2026) where such a strategy is explored, however, citing this work at this stage would compromise the double-blind review process. We will reference it in the revised version once anonymity constraints are lifted.
 
-Instead, we clarify our design choice. We intentionally introduced the **Oracle-OR** baseline, despite its impracticality, to isolate the contribution of multi-resolution learning. The Oracle ensures that the limitation does not stem from post-processing, but rather from the inability of single-resolution models to capture complementary information.
+Instead, we can clarify our design choice. We intentionally introduced the **Oracle-OR** baseline, despite its impracticality, to isolate the contribution of multi-resolution learning. The Oracle ensures that the limitation does not stem from post-processing, but rather from the inability of single-resolution models to capture complementary information.
 
 As also noted by Reviewer hRjP, this Oracle baseline would benefit from additional clarification. We provide further implementation details in our response to that reviewer.
-
-In the revised version, we will reference the ICASSP 2026 work once anonymity constraints are lifted to include the **NMS-based merging** comparison.
-
-## W3. Originality and conceptual contribution
-
-à rédiger ...
 
 ## W3 and Key Question 2. Sensitivity to the number of resolutions
 
@@ -65,8 +59,9 @@ The end-to-end comparison depends on the deployment setting:
 
 A dedicated section reporting processing times has also been introduced for the acoustic dataset.
 
-## Key Question 4: Societal impact
+## W3 and Key Question 4. Originality, conceptual contribution, and societal impact
 
-We agree that the societal impact discussion can be strengthened.
+The contribution is primarily conceptual and architectural. The goal is not simply to aggregate several single-resolution detectors, but to learn a joint representation from complementary time-frequency resolutions within a single detection model.
 
-For readability, we moved the full proposed reformulation to the standalone note [societal_impact_reformulation.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/societal_impact_reformulation.md).
+We also agree that the societal impact discussion can be strengthened. For readability, we moved the full proposed reformulation to the standalone note [societal_impact_reformulation.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/societal_impact_reformulation.md).
+
