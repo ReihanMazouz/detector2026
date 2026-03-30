@@ -89,7 +89,7 @@ We refer the reviewer to our response to reviewer **7cmh**.
 
 ### Q3: Ground truth
 
-Ground-truth boxes are generated from simulation. This will be clarified. We will also include a discussion based on additional results obtained on a real acoustic dataset with manualy annotated ground-truth boxes; the corresponding note is available here: [real_acoustic_data_results.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/real_acoustic_data_results.md).
+Ground-truth boxes are generated from simulation. This will be clarified. We will also include a discussion based on additional results obtained on a real acoustic dataset with manualy annotated ground-truth boxes. The corresponding note is available here: [real_acoustic_data_results.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/real_acoustic_data_results.md).
 
 ### Q14 and Q15: Nature of the contribution
 

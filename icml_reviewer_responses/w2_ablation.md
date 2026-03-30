@@ -2,7 +2,7 @@
 
 ## W2. Questionable necessity of the multi-resolution motivation
 
-We agree that, in theory, the complex-valued STFT representation preserves the full information content of the original signal. This naturally raises the question of whether the choice of STFT window size truly impacts the representation, and whether a single complex spectrogram should be sufficient.
+We agree that, in theory, the complex-valued STFT representation preserves the full information content of the original signal. This naturally raises the question of whether the choice of STFT window size truly impacts the representation, and whether a single complex spectrum should be sufficient.
 
 From a signal detection perspective, this question can be further clarified. In classical detection theory, when dealing with an unknown signal embedded in noise, the Generalized Likelihood Ratio Test (GLRT) leads to a decision rule based primarily on the signal amplitude, without explicitly exploiting phase information [1]. This suggests that, under a fully unknown signal hypothesis, phase may not be necessary for detection. However, this assumption no longer holds in a learning-based framework. A trained neural network implicitly incorporates prior knowledge from the data distribution, relaxing the “unknown signal” hypothesis. In this context, phase information can become informative.
 

@@ -8,4 +8,4 @@ This file contains the full proposed reformulation for the societal impact secti
 > 
 > However, we acknowledge that signal detection technologies may also raise dual-use concerns. In particular, RF signal detection methods can be applied in surveillance, electronic warfare, or intelligence contexts. As such, there is a risk that these technologies could be used in ways that raise privacy, security, or ethical concerns. Similar concerns may also arise in civilian contexts if signal monitoring is deployed without appropriate safeguards, transparency, or legal oversight.
 > 
-> We emphasize that this work is methodological in nature and does not target any specific application domain. We encourage responsible use of such technologies and adherence to applicable legal and ethical standards. Future work should further consider safeguards, usage constraints, and application-specific risk assessments in order to mitigate potential misuse.
+> We emphasize that this work is methodological in nature and does not target any specific application domain. We encourage responsible use of such technologies and adherence to applicable legal and ethical standards.
