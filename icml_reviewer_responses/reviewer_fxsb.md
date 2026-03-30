@@ -36,7 +36,7 @@ If time permits, we will include an **ablation study** on the number of resoluti
 
 ## W4. Presentation and clarity
 
-We agree that the use of architecture-specific acronyms may hinder readability for a broader audience. In the revised version, we will add a **glossary in the appendix** to improve clarity. A draft is available here: [glossary.md](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/glossary.md).
+We agree that the use of architecture-specific acronyms may hinder readability for a broader audience. In the revised version, we will add a **glossary in the appendix** to improve clarity. A draft is available here: [glossary.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/glossary.md).
 
 ## Key Question 3: Computational overhead and latency
 
@@ -69,4 +69,4 @@ A dedicated section reporting processing times has also been introduced for the 
 
 We agree that the societal impact discussion can be strengthened.
 
-For readability, we moved the full proposed reformulation to the standalone note [societal_impact_reformulation.md](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/societal_impact_reformulation.md).
+For readability, we moved the full proposed reformulation to the standalone note [societal_impact_reformulation.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/societal_impact_reformulation.md).

@@ -97,8 +97,8 @@ The contribution is primarily **architectural and representational**, centered o
 
 ## Oracle-OR Algorithm
 
-The standalone LaTeX algorithm is available in [oracle_or_algorithm.md](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/oracle_or_algorithm.md).
+The standalone LaTeX algorithm is available in [oracle_or_algorithm.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/oracle_or_algorithm.md).
 
 ## Glossary Notes
 
-The standalone glossary is available in [glossary.md](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/glossary.md).
+The standalone glossary is available in [glossary.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/glossary.md).

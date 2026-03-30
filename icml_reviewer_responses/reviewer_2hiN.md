@@ -33,7 +33,7 @@ An extended version of these results is provided in the following link: ....
 
 ## Weakness 2: Missing visualization for the reported +64.2% gain
 
-We acknowledge that the absence of a corresponding visualization makes this result difficult to assess. In the revised version, it will be included. Those can be found here: [confusion_matrices_row_normalized.md](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/confusion_matrices_row_normalized.md).
+We acknowledge that the absence of a corresponding visualization makes this result difficult to assess. In the revised version, it will be included. Those can be found here: [confusion_matrices_row_normalized.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/confusion_matrices_row_normalized.md).
 
 ## Weakness 3: Lack of definition of signal classes
 

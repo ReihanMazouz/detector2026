@@ -20,7 +20,7 @@ As a concise ablation summary, we compared three single-resolution input paramet
 
 This ablation indicates that, in our setting, explicitly providing the complex spectrum does not improve over amplitude alone. This is precisely why we frame the benefit of multi-resolution STFTs as a better inductive bias, rather than as recovery of information missing from a single complex spectrogram.
 
-For readability, we moved the full technical answer, including the discussion of real/imaginary inputs and complex-valued neural networks, to the standalone note [reviewer_7cmh_w2_detailed.md](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/reviewer_7cmh_w2_detailed.md).
+For readability, we moved the full technical answer to [w2_ablation.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/w2_ablation.md).
 
 ## W3. Potential over-engineering
 
