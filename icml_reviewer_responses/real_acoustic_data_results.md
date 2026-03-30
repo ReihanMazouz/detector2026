@@ -2,7 +2,7 @@
 
 All previous experiments were conducted on simulated RF interception datasets (Datasets A and B), specifically designed to control signal diversity, spectral congestion, and SNR conditions for systematic ablation. While these synthetic benchmarks allow rigorous architectural evaluation, they do not assess generalization to real-world data. To evaluate the broader applicability of `MRS-YOLO`, we therefore extend our study to a real hydrophone-based marine mammal dataset collected by Ocean Networks Canada (ONC) near Barkley Canyon (48.426°N, -126.174°W).
 
-The dataset corresponds to a publicly available annotated marine acoustic corpus. Recordings were acquired using a seabed-mounted broadband hydrophone sampling continuously at 64 kSps (32 kHz effective bandwidth). The dataset spans approximately one year of duty-cycled recordings and contains 12,763 manually annotated marine mammal phonations from multiple cetacean species, including baleen whales (fin, blue, humpback), toothed whales (sperm whales, orcas), and several delphinid species (Pacific white-sided dolphins, Risso's dolphins, and others). Crucially, each annotation includes explicit time-frequency bounds, making the dataset directly compatible with spectrogram-based object detection frameworks.
+The dataset corresponds to a publicly available annotated marine acoustic corpus [1]. Recordings were acquired using a seabed-mounted broadband hydrophone sampling continuously at 64 kSps (32 kHz effective bandwidth). The dataset spans approximately one year of duty-cycled recordings and contains 12,763 manually annotated marine mammal phonations from multiple cetacean species, including baleen whales (fin, blue, humpback), toothed whales (sperm whales, orcas), and several delphinid species (Pacific white-sided dolphins, Risso's dolphins, and others). Crucially, each annotation includes explicit time-frequency bounds, making the dataset directly compatible with spectrogram-based object detection frameworks.
 
 This dataset is particularly relevant for evaluating multi-resolution architectures for three reasons:
 
@@ -10,7 +10,7 @@ This dataset is particularly relevant for evaluating multi-resolution architectu
 - The original annotation protocol explicitly relied on multiple spectrogram configurations: different frequency bands required distinct STFT window lengths to ensure proper species identification. Low-frequency baleen whale calls require fine frequency resolution, whereas high-frequency odontocete clicks demand fine temporal resolution, with mid-frequency whistles falling between these regimes.
 - Unlike many bioacoustic corpora that provide clip-level labels only, this dataset includes precise time-frequency bounding boxes, enabling structured detection and localization evaluation analogous to our RF experiments.
 
-The objective of this cross-application experiment is not to derive new biological conclusions, but to assess whether the architectural advantages of explicit multi-resolution fusion extend beyond simulated RF scenarios to real acoustic data. This experiment thus serves as an external validation of the core design principles underlying `MRS-YOLO`.
+This experiment thus serves as an external validation of the core design principles underlying `MRS-YOLO`.
 
 ## Preprocessing and Multi-Resolution Representation
 
@@ -42,9 +42,7 @@ $$
 \tilde{x}(t) = x(t) + n(t).
 $$
 
-Three degradation regimes are constructed in addition to the initial dataset, corresponding to relative noise powers of `-20 dB` (medium degradation), `-15 dB` (strong degradation), and `-10 dB` (very strong degradation).
-
-This controlled augmentation enables a systematic analysis of robustness under increasing noise levels while preserving identical annotations and preprocessing steps, thereby isolating the impact of signal degradation on detection performance.
+Three degradation regimes are constructed in addition to the initial dataset, corresponding to relative noise powers of `-20 dB` (medium degradation), `-15 dB` (strong degradation), and `-10 dB` (very strong degradation). This controlled augmentation enables a systematic analysis of robustness under increasing noise levels while preserving identical annotations and preprocessing steps, thereby isolating the impact of signal degradation on detection performance.
 
 ## Detection Performance
 
@@ -71,7 +69,7 @@ A first notable observation is the near absence of inter-class confusion across 
 
 However, performance strongly depends on the STFT resolution. While configurations from 512 to 2048 exhibit high diagonal dominance, larger windows show a noticeable degradation in detection probability across all classes. This degradation becomes particularly severe at 4096 and 8192, where recall drops substantially for every biological class and a large proportion of samples are assigned to noise. This confirms that excessively large windows reduce discriminative capacity on the initial dataset.
 
-The primary difference between models therefore lies in detection probability, that is, diagonal terms, not class discrimination. Comparing diagonal entries, `MRS-YOLO` consistently achieves the highest per-class recall for most classes.
+The primary difference between models therefore lies in detection probability, that is, diagonal terms, not class discrimination. Comparing diagonal entries, `MRS-YOLO` consistently achieves the highest per-class recall for every classes.
 
 Relative to the best single-resolution configuration for each class, `MRS-YOLO` improves detection probability by:
 
@@ -83,9 +81,7 @@ Relative to the best single-resolution configuration for each class, `MRS-YOLO` 
 
 Overall, the multi-resolution model provides consistent gains for the five biological classes, particularly for *Orcinus orca*, while maintaining near-perfect discrimination for *Megaptera novaeangliae*. 
 
-![Row-normalized confusion matrices on the clean acoustic dataset](assets/acoustic_confusion_matrices_clean.png)
-
-Row-normalized confusion matrices on the clean acoustic dataset.
+![Row-normalized confusion matrices](assets/acoustic_confusion_matrices_clean.png)
 
 ## Processing Time
 
@@ -99,7 +95,7 @@ These total processing times remain significantly below the effective real-time 
 
 Several important elements must be considered when interpreting these results.
 
-First, all annotations in this dataset were produced manually through audio-visual inspection. While this ensures high biological validity, it also introduces unavoidable approximation in the time-frequency bounding boxes. In practice, manual annotations may be temporally or spectrally over-extended, may truncate faint signal components, or may not perfectly align with the most energetic region of the call. As a consequence, strict localization metrics based on high IoU thresholds can penalize predictions that are visually and biologically accurate, yet more tightly aligned with the true signal structure than the original human annotation. For this reason, recall is evaluated at an IoU threshold of `0.5`. Empirically, increasing the IoU threshold often leads to rejecting detections that are in fact well localized, and in some cases more precisely delimited than the manual bounding boxes.
+First, all annotations in this dataset were produced manually through audio-visual inspection. It introduces unavoidable approximation in the time-frequency bounding boxes. In practice, manual annotations may be temporally or spectrally over-extended, may truncate faint signal components, or may not perfectly align with the most energetic region of the call. As a consequence, strict localization metrics based on high IoU thresholds can penalize predictions that are visually and biologically accurate, yet more tightly aligned with the true signal structure than the original human annotation. For this reason, recall is evaluated at an IoU threshold of `0.5`. Empirically, increasing the IoU threshold often leads to rejecting detections that are in fact well localized, and in some cases more precisely delimited than the manual bounding boxes.
 
 Second, the introduction of controlled waveform-level degradation through additive noise directly impacts interpretability. At lower degradation levels, some segments become barely distinguishable even to a human operator when visualized as spectrograms. Consequently, certain detections counted as false alarms may in fact correspond to weak or previously unnoticed biological events that were not annotated due to low perceptual saliency during manual review.
 
@@ -130,3 +126,7 @@ Qualitative detection examples on real hydrophone data obtained with the propose
 ### *Physeter macrocephalus* (Pm)
 
 ![Physeter macrocephalus example](assets/spectrum_512_class_3.png)
+
+## References
+
+[1] K. S. J. Kanes, "Recycling data: An annotated marine acoustic data set that is publicly available for use in classifier development and marine mammal research," *The Journal of the Acoustical Society of America*, vol. 148, p. 2595, 2020. DOI: 10.1121/1.5147208.

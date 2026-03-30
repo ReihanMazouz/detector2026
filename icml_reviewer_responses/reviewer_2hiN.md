@@ -16,7 +16,7 @@ To address this limitation more meaningfully, we include in the revised version 
 
 This dataset consists of real signals collected in uncontrolled environments, which significantly differ from radar data, thereby demonstrating the generality and robustness of our approach.
 
-The results are summarized in Table~\ref{tab:onc_results}. MRS-YOLO consistently outperforms all single-resolution baselines, particularly under strong degradation conditions.
+The results are summarized in the Table below. MRS-YOLO consistently outperforms all single-resolution baselines, particularly under degradation conditions.
 
 | Model | Initial R@0.9P | Initial mAP50 | Initial mAP50:95 | Moderate Noise R@0.9P | Moderate Noise mAP50 | Moderate Noise mAP50:95 | Strong Noise R@0.9P | Strong Noise mAP50 | Strong Noise mAP50:95 | Very Strong Noise R@0.9P | Very Strong Noise mAP50 | Very Strong Noise mAP50:95 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
