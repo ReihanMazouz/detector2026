@@ -12,13 +12,11 @@ The reviewer correctly states that a fusion model should not outperform a true i
 
 ### Q11 and Q12
 
-The revised oracle definition should clarify the handling of duplicate detections, confidence scores, and aggregation. It is important to emphasize that the oracle, by construction, exhibits a higher FAR than individual models.
+It is important to emphasize that the oracle, by construction, exhibits a higher false alarm rate (FAR) than individual models. This increased FAR does not impact recall nor classification accuracy (as measured by confusion matrices without noise class), but it does indeed affect mAP.
 
-This increased FAR does not impact recall nor classification accuracy (as measured by confusion matrices), but it does affect mAP. Therefore, mAP comparisons involving the oracle must be interpreted with caution.
+As for alternative strategies, please refer to our response to Reviewer **fxsb**. Such approaches were explored but a key difficulty is that confidence scores across single-resolution models are not calibrated consistently. As a result, applying a global NMS tends to favor predictions with higher raw confidence, which may not correspond to the most reliable detections across resolutions.
 
-As for alternative strategies, merged-prediction approaches were also explored separately and will be cited after the review process. A key difficulty is that confidence scores across single-resolution models are not calibrated consistently. As a result, applying a global NMS tends to favor predictions with higher raw confidence, which may not correspond to the most reliable detections across resolutions.
-
-In contrast, the proposed oracle avoids introducing additional bias from score aggregation and provides a controlled reference for analyzing recall and classification performance, while mAP comparisons must be interpreted carefully.
+In contrast, the proposed oracle avoids introducing additional bias from score aggregation and provides a controlled reference for analyzing recall and classification performance (upped bound), while mAP comparisons must be interpreted carefully.
 
 ## Q4: STFT vs wavelets and role of the spectrogram
 
