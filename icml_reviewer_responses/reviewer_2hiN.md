@@ -12,7 +12,7 @@ Concerning **RadDet**, although it is a relevant benchmark, it cannot be directl
 
 To address this limitation more meaningfully, we include in the revised version a **cross-domain evaluation** on real-world acoustic data:
 
-- *Ocean Networks Canada (ONC) hydrophone dataset*, publicly available and annotated for marine mammal detection~\cite{kanes2020recycling}.
+- *Ocean Networks Canada (ONC) hydrophone dataset*, publicly available and annotated for marine mammal detection [1].
 
 This dataset consists of real signals collected in uncontrolled environments, which significantly differ from radar data, thereby demonstrating the generality and robustness of our approach.
 
@@ -37,7 +37,7 @@ We acknowledge that the absence of a corresponding visualization makes this resu
 
 ## Weakness 3: Lack of definition of signal classes
 
-We agree that introducing signal classes only as acronyms reduces clarity. A detailed description of each waveform will be provided in the **appendix**, it can be found in ...
+We agree that introducing signal classes only as acronyms reduces clarity. A detailed description of each waveform will be provided in the **appendix**; it can be found here: [waveform_descriptions.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/waveform_descriptions.md).
 
 ## Key Question: Translation invariance and SCSA on spectrograms
 
@@ -46,7 +46,11 @@ We agree that spectrograms do not exhibit translation invariance, especially alo
 Its use is primarily motivated by ablation results, but it can also be interpreted intuitively in our framework:
 
 - The goal of SCSA is to improve the **fusion of multi-resolution feature spaces** after concatenation and before filtering.
-- **Channel attention** naturally enables the model to select the most informative features across resolutions, reducing redundancy.
+- **Channel attention** is a natural choice here because reweighting channels before the subsequent channel filtering stage helps the model emphasize the most useful resolution-dependent features at the right moment in the pipeline.
 - **Spatial attention**, applied beforehand, emphasizes relevant time-frequency regions. At this stage, all feature maps are aligned on a common spatial grid: a signal located at $(x,y)$ in one resolution remains localized at the same position across all resolutions. Therefore, applying spatial attention around this location is consistent and meaningful.
 
 In this context, spatial attention acts as a **location-dependent weighting** rather than relying on any assumption of translation invariance.
+
+## References
+
+[1] K. S. J. Kanes, "Recycling data: An annotated marine acoustic data set that is publicly available for use in classifier development and marine mammal research," *The Journal of the Acoustical Society of America*, vol. 148, p. 2595, 2020. DOI: 10.1121/1.5147208.
