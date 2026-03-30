@@ -2,6 +2,8 @@
 
 ## LFM
 
+LFM stands for **Linear Frequency Modulation**. It is the classical linear chirp radar waveform, with instantaneous frequency varying linearly over time [1].
+
 \[
 s(t) = A e^{j\left(2\pi f_c t + k \pi t^2 + \varphi_0\right)}, \quad 0 < t \leq T_s
 \]
@@ -15,6 +17,8 @@ s(t) = A e^{j\left(2\pi f_c t + \frac{8B}{3T_s^2} \pi \left(t - \frac{T_s}{2}\ri
 
 ## NLFM
 
+NLFM stands for **Non-Linear Frequency Modulation**. Unlike LFM, the instantaneous frequency law is shaped nonlinearly to improve spectral containment or sidelobe behavior after pulse compression [1].
+
 \[
 s(t) = A e^{j\left(2\pi f_c t + \phi(t) + \varphi_0\right)}, \quad 0 < t \leq T_s
 \]
@@ -27,43 +31,9 @@ s(t) = A e^{j\left(2\pi f_c t + \phi(t) + \varphi_0\right)}, \quad 0 < t \leq T_
 \beta = \arctan(\alpha), \quad \alpha \in [3.5,\,10]
 \]
 
-## Costas
-
-\[
-s(t) = \sum_{i=1}^{N_c} \phi_i(t - i\Delta t), \quad 0 < t \leq T_s
-\]
-
-\[
-\phi_i(t) = \mathrm{Rect}\!\left(\frac{t}{\Delta t}\right) A e^{j(2\pi f_i t + \varphi_0)}, \quad 1 \leq i \leq N_c
-\]
-
-## Barker Biphasic
-
-\[
-s(t) = A e^{j\left(2\pi f_c t + \varphi(t) + \varphi_0\right)}, \quad 0 < t \leq T_s
-\]
-
-\[
-\varphi(t) = \sum_{i=1}^{N_c} \varphi_i \, r\!\left(\frac{t-i\Delta t}{\Delta t}\right),
-\quad \varphi_i \in \{0,\pi\}
-\]
-
-where \(\{\varphi_i\}_{i=1}^{N_c}\) is a Barker phase code.
-
-## Random Biphasic
-
-\[
-s(t) = A e^{j\left(2\pi f_c t + \varphi(t) + \varphi_0\right)}, \quad 0 < t \leq T_s
-\]
-
-\[
-\varphi(t) = \sum_{i=1}^{N_c} \varphi_i \, r\!\left(\frac{t-i\Delta t}{\Delta t}\right),
-\quad \varphi_i \in \{0,\pi\}
-\]
-
-where the phases \(\varphi_i\) are drawn randomly.
-
 ## BPSK
+
+BPSK stands for **Binary Phase-Shift Keying**. In this context, it denotes a binary phase-coded waveform whose chips alternate between two phase states [1].
 
 \[
 s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
@@ -75,6 +45,8 @@ s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
 \]
 
 ## Frank
+
+The Frank code is a **polyphase coded waveform** constructed from an `N_p \times N_p` phase matrix. It is one of the standard polyphase pulse-compression codes described in radar waveform design references [2].
 
 \[
 s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
@@ -89,6 +61,8 @@ s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
 \]
 
 ## P1
+
+P1 is a **polyphase radar code** derived from the Frank family, designed to provide structured phase variation across chips for pulse compression [2].
 
 \[
 s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
@@ -105,6 +79,8 @@ s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
 
 ## P2
 
+P2 is another **polyphase code** closely related to P1, with a different phase law chosen to preserve good ambiguity and sidelobe properties [2].
+
 \[
 s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
 \]
@@ -120,6 +96,8 @@ s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
 
 ## P3
 
+P3 is a **polyphase pulse-compression code** with a quadratic phase progression across chips [2].
+
 \[
 s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
 \]
@@ -134,6 +112,8 @@ s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
 
 ## P4
 
+P4 is another **polyphase code** in the same family, differing from P3 by an additional linear phase term [2].
+
 \[
 s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
 \]
@@ -147,6 +127,8 @@ s(t) = A e^{j(2\pi f_c t + \varphi(t) + \varphi_0)}, \quad 0 < t \leq T_s
 \]
 
 ## T1
+
+T1 is a **discrete polyphase waveform** obtained by quantizing an underlying continuous phase law into `M` phase states [2].
 
 \[
 s(t) = A e^{j(2\pi f_c t + \varphi_{T1}(t) + \varphi_0)}, \quad 0 < t \leq T_s
@@ -174,6 +156,8 @@ for \(t \in \left[\frac{jT_s}{K}, \frac{(j+1)T_s}{K}\right)\).
 
 ## T2
 
+T2 is another **discrete polyphase waveform** based on a quantized piecewise phase construction [2].
+
 \[
 s(t) = A e^{j(2\pi f_c t + \varphi_{T2}(t) + \varphi_0)}, \quad 0 < t \leq T_s
 \]
@@ -197,6 +181,8 @@ Let \(K = N_c\) and \(M\) be the number of phase states.
 
 ## T3
 
+T3 is a **quantized polyphase waveform** derived from a quadratic phase law [2].
+
 \[
 s(t) = A e^{j(2\pi f_c t + \varphi_{T3}(t) + \varphi_0)}, \quad 0 < t \leq T_s
 \]
@@ -217,6 +203,8 @@ s(t) = A e^{j(2\pi f_c t + \varphi_{T3}(t) + \varphi_0)}, \quad 0 < t \leq T_s
 \]
 
 ## T4
+
+T4 is a **quantized polyphase waveform** related to T3, with an additional linear phase term [2].
 
 \[
 s(t) = A e^{j(2\pi f_c t + \varphi_{T4}(t) + \varphi_0)}, \quad 0 < t \leq T_s
@@ -248,6 +236,8 @@ where \(a_i \in \mathcal{A}_M\) are complex-valued symbols drawn from an \(M\)-Q
 
 ## FSK
 
+FSK stands for **Frequency-Shift Keying**. It is a frequency-coded waveform in which the instantaneous frequency switches between a finite set of discrete tones from one symbol interval to the next [1].
+
 \[
 s(t) = A e^{j\left(2\pi \int_0^t f(\tau)\,d\tau + \varphi_0\right)}, \quad 0 < t \leq T_s
 \]
@@ -268,11 +258,11 @@ LFSK follows the same slot structure as FSK, with a local chirp added within eac
 
 ## OFDM
 
-OFDM is a **telecommunication waveform** in which the transmitted information is distributed across many closely spaced orthogonal subcarriers. Each subcarrier carries a low-rate data stream, which makes the overall transmission efficient for broadband links and robust to frequency-selective channels [1].
+OFDM stands for **Orthogonal Frequency-Division Multiplexing**. It is a telecommunication waveform in which the transmitted information is distributed across many closely spaced orthogonal subcarriers. Each subcarrier carries a low-rate data stream, which makes the overall transmission efficient for broadband links and robust to frequency-selective channels [3].
 
 ## DSSS
 
-DSSS is a **telecommunication waveform** based on spread-spectrum principles: the information signal is multiplied by a higher-rate spreading code, which spreads its energy over a wider bandwidth. This improves robustness to interference and is a core mechanism in many wireless and military communication systems [2].
+DSSS stands for **Direct-Sequence Spread Spectrum**. It is a telecommunication waveform based on spread-spectrum principles: the information signal is multiplied by a higher-rate spreading code, which spreads its energy over a wider bandwidth. This improves robustness to interference and is a core mechanism in many wireless and military communication systems [4].
 
 ## Notation
 
@@ -293,5 +283,7 @@ DSSS is a **telecommunication waveform** based on spread-spectrum principles: th
 
 ## References
 
-- [1] Richard van Nee and Ramjee Prasad, *OFDM for Wireless Multimedia Communications*, Artech House, 2000. Collection: Universal Personal Communications. ISBN: 0-89006-530-6.
-- [2] Roger L. Peterson, Rodger E. Ziemer, and David E. Borth, *Introduction to Spread Spectrum Communications*, Prentice Hall, 1995.
+- [1] Nadav Levanon and Eli Mozeson, *Radar Signals*, John Wiley & Sons, 2004.
+- [2] Phillip E. Pace, *Detecting and Classifying Low Probability of Intercept Radar*, Artech House, 2009.
+- [3] Richard van Nee and Ramjee Prasad, *OFDM for Wireless Multimedia Communications*, Artech House, 2000. Collection: Universal Personal Communications. ISBN: 0-89006-530-6.
+- [4] Roger L. Peterson, Rodger E. Ziemer, and David E. Borth, *Introduction to Spread Spectrum Communications*, Prentice Hall, 1995.
