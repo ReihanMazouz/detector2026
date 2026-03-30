@@ -12,7 +12,7 @@ Following this reasoning, one may consider directly processing the complex spect
 
   In this approach, the complex spectrogram is decomposed into its real and imaginary components, which are treated as two input channels for a standard CNN. This paradigm is widely adopted as it preserves compatibility with real-valued architectures and benefits from stable training procedures.
 
-  For instance, prior work on complex spectral mapping and complex spectrogram enhancement treats real and imaginary parts as explicit channels and reports benefits from exploiting richer spectral structure [2, 3]. This literature suggests that including phase-related information can be beneficial in some settings.
+  For instance, prior work on complex spectral mapping, complex spectrogram enhancement, and complex ratio masking treats real and imaginary parts as explicit channels or jointly models magnitude and phase, and reports benefits from exploiting richer spectral structure [2, 3, 4]. This literature suggests that including phase-related information can be beneficial in some settings.
 
   We propose an evaluation of this approach by feeding amplitude and phase (or equivalently real and imaginary components) as separate channels. The corresponding single-resolution comparison is summarized below:
 
@@ -34,9 +34,9 @@ Following this reasoning, one may consider directly processing the complex spect
 
 - **(ii) Complex-valued neural networks.**
 
-  A more principled alternative consists in designing neural networks that operate directly in the complex domain. As discussed in the survey literature [4], such models offer a theoretically appealing framework but introduce practical challenges. In particular, they suffer from numerical instability during training.
+  A more principled alternative consists in designing neural networks that operate directly in the complex domain. As discussed in the survey literature [5], such models offer a theoretically appealing framework but introduce practical challenges. In particular, they suffer from numerical instability during training.
 
-  In the context of object detection, CV-YOLO [5] proposes a complex-valued extension of YOLO for SAR image analysis. Their results indicate that complex-valued modeling can provide improvements (approximately +1.4% mAP50 and +0.5% mAP50:95) compared to real-valued models with a similar number of parameters. However, this gain comes at a significant computational cost, with FLOPs roughly doubling due to complex-valued operations.
+  In the context of object detection, CV-YOLO [6] proposes a complex-valued extension of YOLO for SAR image analysis. Their results indicate that complex-valued modeling can provide improvements (approximately +1.4% mAP50 and +0.5% mAP50:95) compared to real-valued models with a similar number of parameters. However, this gain comes at a significant computational cost, with FLOPs roughly doubling due to complex-valued operations.
 
 Overall, these observations suggest that while complex representations are theoretically complete and potentially beneficial, current convolutional neural networks struggle to effectively exploit phase information in practice. By leveraging multiple time-frequency resolutions, we expose the network to complementary structures that are more readily exploitable than raw phase information. Therefore, the proposed approach does not contradict the theoretical completeness of the STFT, but instead introduces a **meaningful inductive bias** that improves learning efficiency and robustness in realistic detection scenarios.
 
@@ -48,6 +48,8 @@ Overall, these observations suggest that while complex representations are theor
 
 [3] Szu-Wei Fu, Ting-Yao Hu, Yu Tsao, and Xugang Lu, “Complex spectrogram enhancement by convolutional neural network with multi-metrics learning,” in *2017 IEEE 27th International Workshop on Machine Learning for Signal Processing (MLSP)*, pp. 1-6, IEEE, 2017.
 
-[4] ChiYan Lee, Hideyuki Hasegawa, and Shangce Gao, “Complex-valued neural networks: A comprehensive survey,” *IEEE/CAA Journal of Automatica Sinica*, vol. 9, no. 8, pp. 1406-1426, 2022.
+[4] Donald S. Williamson, Yuxuan Wang, and DeLiang Wang, “Complex ratio masking for joint enhancement of magnitude and phase,” in *2016 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)*, pp. 5220-5224, IEEE, 2016. DOI: 10.1109/ICASSP.2016.7472673.
 
-[5] Dandan Zhao, Zhe Zhang, Dongdong Lu, Xiaolan Qiu, Wei Li, Hang Li, and Yirong Wu, “CV-YOLO: A complex-valued convolutional neural network for oriented ship detection in single-polarization single-look complex SAR images,” *Remote Sensing*, vol. 17, no. 8, p. 1478, 2025.
+[5] ChiYan Lee, Hideyuki Hasegawa, and Shangce Gao, “Complex-valued neural networks: A comprehensive survey,” *IEEE/CAA Journal of Automatica Sinica*, vol. 9, no. 8, pp. 1406-1426, 2022.
+
+[6] Dandan Zhao, Zhe Zhang, Dongdong Lu, Xiaolan Qiu, Wei Li, Hang Li, and Yirong Wu, “CV-YOLO: A complex-valued convolutional neural network for oriented ship detection in single-polarization single-look complex SAR images,” *Remote Sensing*, vol. 17, no. 8, p. 1478, 2025.

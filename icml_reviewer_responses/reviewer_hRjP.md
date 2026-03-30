@@ -4,7 +4,7 @@ We thank the reviewer for the detailed and technically insightful feedback.
 
 ## Q5 -> Q13: About the Oracle
 
-We agree that the original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition (see the standalone file [oracle_or_algorithm.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/oracle_or_algorithm.md)).
+We agree that the original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition (see the standalone file [oracle_or_algorithm.tex](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/oracle_or_algorithm.tex)).
 
 ### Formalization of the Oracle
 
@@ -89,7 +89,8 @@ We refer the reviewer to our response to reviewer **7cmh**.
 
 ### Q3: Ground truth
 
-Ground-truth boxes are generated from simulation. This will be clarified. We will also include a discussion based on additional results obtained on a real acoustic dataset with manualy annotated ground-truth boxes. The corresponding note is available here: [real_acoustic_data_results.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/real_acoustic_data_results.md).
+Ground-truth boxes are generated from the known parameters used to generate the 
+signals. This will be clarified. We will also include a discussion based on additional results obtained on a real acoustic dataset with manualy annotated ground-truth boxes. The corresponding note is available here: [real_acoustic_data_results.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/real_acoustic_data_results.md).
 
 ### Q14 and Q15: Nature of the contribution
 

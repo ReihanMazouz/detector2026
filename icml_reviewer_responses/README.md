@@ -9,7 +9,7 @@ Ce dossier regroupe les réponses aux reviewers ainsi que les notes complémenta
 - [Societal Impact Reformulation](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/societal_impact_reformulation.md)
 - [Reviewer hRjP](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/reviewer_hRjP.md)
 - [Real Acoustic Data Results](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/real_acoustic_data_results.md)
-- [Oracle-OR Algorithm](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/oracle_or_algorithm.md)
+- [Oracle-OR Algorithm](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/oracle_or_algorithm.tex)
 - [Glossary](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/glossary.md)
 - [Row-Normalized Confusion Matrices](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/confusion_matrices_row_normalized.md)
 - [Waveform Descriptions](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/waveform_descriptions.md)

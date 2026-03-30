@@ -1,8 +1,29 @@
-# Oracle-OR Algorithm
+\section{Oracle-OR Algorithm}
 
-This file contains the Oracle-OR algorithm as standalone LaTeX source for reuse in the rebuttal, revision, or camera-ready version.
+\subsection{Formalization of the Oracle}
 
-```latex
+Let $\{\mathcal{P}_r\}_{r=1}^{R}$ be the post-NMS prediction sets from the $R$ single-resolution models, and $\mathcal{G}=\{(b_g,c_g)\}$ the ground-truth set.
+
+For each ground-truth instance $g=(b_g,c_g)$, we define the candidate set:
+
+\[
+\mathcal{M}_g = \left\{ p=(b_p,c_p,s_p)\in \bigcup_{r=1}^{R}\mathcal{P}_r \;:\; \mathrm{IoU}(b_p,b_g)\geq \tau \right\}.
+\]
+
+We then define the correctly classified subset:
+
+\[
+\mathcal{M}_g^{\mathrm{cls}} = \left\{ p\in \mathcal{M}_g \;:\; c_p = c_g \right\}.
+\]
+
+If $\mathcal{M}_g^{\mathrm{cls}}\neq\emptyset$, we retain this subset; otherwise, we keep $\mathcal{M}_g$. The selected prediction is:
+
+$$
+p^*(g) = \arg\max_{p\in\mathcal{M}_g} \mathrm{IoU}(b_p,b_g).
+$$
+
+Predictions that do not intersect any ground-truth instance are treated as false alarms, with an additional redundancy filtering step applied to avoid counting overlapping false detections multiple times.
+
 \begin{algorithm}[t]
 \caption{\textsc{Oracle-OR} from post-NMS single-resolution predictions}
 \label{alg:oracle_or}
@@ -67,4 +88,3 @@ $\mathcal{P}_{\mathrm{oracle}} \leftarrow \mathcal{P}_{\mathrm{oracle}} \cup \ma
 \BlankLine
 \Return{$\mathcal{P}_{\mathrm{oracle}},\ \mathcal{F}_{\mathrm{oracle}}$}\;
 \end{algorithm}
-```
