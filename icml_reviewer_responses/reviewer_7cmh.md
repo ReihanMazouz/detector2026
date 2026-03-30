@@ -4,7 +4,7 @@ We thank the reviewer for their detailed and thoughtful evaluation. We address t
 
 ## W1. Lack of real-world evaluation
 
-Se rapporter à la réponse faite à 2hiN.
+See the response to reviewer 2hiN as well as the standalone note [real_acoustic_data_results.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/real_acoustic_data_results.md).
 
 ## W2. Questionable necessity of the multi-resolution motivation
 

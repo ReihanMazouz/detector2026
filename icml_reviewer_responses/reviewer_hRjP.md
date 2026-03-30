@@ -4,7 +4,7 @@ We thank the reviewer for the detailed and technically insightful feedback.
 
 ## Q5 -> Q13: About the Oracle
 
-We agree that the original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition (see the standalone file `oracle_or_algorithm.md`).
+We agree that the original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition (see the standalone file [oracle_or_algorithm.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/oracle_or_algorithm.md)).
 
 ### Formalization of the Oracle
 
@@ -89,16 +89,8 @@ We refer the reviewer to our response to reviewer **7cmh**.
 
 ### Q3: Ground truth
 
-Ground-truth boxes are generated from simulation. This will be clarified. We will also include a discussion based on additional results obtained on a real acoustic dataset with manualy annotated ground-truth boxes.
+Ground-truth boxes are generated from simulation. This will be clarified. We will also include a discussion based on additional results obtained on a real acoustic dataset with manualy annotated ground-truth boxes; the corresponding note is available here: [real_acoustic_data_results.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/real_acoustic_data_results.md).
 
 ### Q14 and Q15: Nature of the contribution
 
 The contribution is primarily **architectural and representational**, centered on time-frequency detection. Rather than being application-specific (e.g., RF or acoustic), it is driven by the general problem of detecting structures in time-frequency representations. More generally, the approach can be applied to any setting where multiple complementary representations can be fused within a detection framework.
-
-## Oracle-OR Algorithm
-
-The standalone LaTeX algorithm is available in [oracle_or_algorithm.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/oracle_or_algorithm.md).
-
-## Glossary Notes
-
-The standalone glossary is available in [glossary.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/glossary.md).

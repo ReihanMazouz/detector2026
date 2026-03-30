@@ -27,7 +27,7 @@ The results are summarized in Table~\ref{tab:onc_results}. MRS-YOLO consistently
 | YOLO (8192) | 0.368 | 0.440 | 0.284 | 0.105 | 0.069 | 0.055 | 0.065 | 0.012 | 0.011 | 0.035 | 0.019 | 0.016 |
 | **MRS-YOLO** | **0.962** | **0.956** | **0.931** | **0.591** | **0.589** | **0.563** | **0.463** | **0.458** | **0.431** | **0.247** | **0.008** | **0.007** |
 
-An extended version of these results is provided in the following link: ....
+An extended version of these results is provided here: [real_acoustic_data_results.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/real_acoustic_data_results.md).
 
 **This additional experiment represents a significant contribution to the revised version of the paper, as it demonstrates that our model is able to maintain superior performance in a fundamentally different setting involving real-world data.**
 

@@ -4,7 +4,7 @@ We thank the reviewer for the thorough evaluation and constructive feedback. We 
 
 ## W1. Lack of real-world evaluation and reproducibility
 
-Se référer à la réponse faite au reviewer 2hiN
+See the response to reviewer 2hiN as well as the standalone note [real_acoustic_data_results.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/real_acoustic_data_results.md).
 
 ## W2 and Key Question 1. Evaluation baselines (decision-level ensemble vs Oracle)
 
