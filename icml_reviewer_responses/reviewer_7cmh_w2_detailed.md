@@ -4,7 +4,7 @@
 
 We agree that, in theory, the complex-valued STFT representation preserves the full information content of the original signal. This naturally raises the question of whether the choice of STFT window size truly impacts the representation, and whether a single complex spectrogram should be sufficient.
 
-From a signal detection perspective, this question can be further clarified. In classical detection theory, when dealing with an unknown signal embedded in noise, the Generalized Likelihood Ratio Test (GLRT) leads to a decision rule based primarily on the signal amplitude, without explicitly exploiting phase information, as detailed in *H. Poor, “An Introduction to Signal Detection and Estimation,” Springer, 1994*. This suggests that, under a fully unknown signal hypothesis, phase may not be necessary for detection. However, this assumption no longer holds in a learning-based framework. A trained neural network implicitly incorporates prior knowledge from the data distribution, relaxing the “unknown signal” hypothesis. In this context, phase information can become informative.
+From a signal detection perspective, this question can be further clarified. In classical detection theory, when dealing with an unknown signal embedded in noise, the Generalized Likelihood Ratio Test (GLRT) leads to a decision rule based primarily on the signal amplitude, without explicitly exploiting phase information [1]. This suggests that, under a fully unknown signal hypothesis, phase may not be necessary for detection. However, this assumption no longer holds in a learning-based framework. A trained neural network implicitly incorporates prior knowledge from the data distribution, relaxing the “unknown signal” hypothesis. In this context, phase information can become informative.
 
 Following this reasoning, one may consider directly processing the complex spectrogram instead of introducing a multi-resolution framework. Two main strategies are commonly explored in the literature:
 
@@ -12,16 +12,42 @@ Following this reasoning, one may consider directly processing the complex spect
 
   In this approach, the complex spectrogram is decomposed into its real and imaginary components, which are treated as two input channels for a standard CNN. This paradigm is widely adopted as it preserves compatibility with real-valued architectures and benefits from stable training procedures.
 
-  For instance, in *“Complex Spectral Mapping With Attention Based Convolution Recurrent Neural Network for Speech Enhancement”*, the authors show that attention mechanisms can significantly improve performance by filtering out irrelevant features and enhancing informative patterns. Similarly, in *“Complex Spectrogram Enhancement by Convolutional Neural Network with Multi-Metrics Learning”*, real and imaginary spectrograms are explicitly treated as separate channels.
+  For instance, prior work on complex spectral mapping and complex spectrogram enhancement treats real and imaginary parts as explicit channels and reports benefits from exploiting richer spectral structure [2, 3]. This literature suggests that including phase-related information can be beneficial in some settings.
 
-  However, these works also highlight an important limitation: while the real and imaginary parts exhibit structured patterns that can be exploited by CNNs, the phase itself remains difficult to learn directly, especially in low SNR regimes. In such conditions, the noisy phase can significantly deviate from the clean phase, making it challenging for neural networks to learn consistent phase relationships. As a result, even when reconstructing real and imaginary components, the benefit of explicitly modeling phase remains limited in practice.
+  We propose an evaluation of this approach by feeding amplitude and phase (or equivalently real and imaginary components) as separate channels. The corresponding single-resolution comparison is summarized below:
 
-  In our work, we also evaluated this approach by feeding amplitude and phase (or equivalently real and imaginary components) as separate channels. However, we did not observe significant performance improvements compared to magnitude-only representations (see Table~X), suggesting that simply exposing phase information is not sufficient for effective exploitation in our detection setting.
+  | Representation | mAP50:95 | mAP50 | Recall low SNR | Recall medium SNR | Recall high SNR | Params | FLOPs |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | Amplitude only | 0.3396 | 0.3999 | 0.4420 | 0.5599 | 0.6327 | 2.88M | 629.64M |
+  | Amplitude + phase | 0.3127 | 0.3833 | 0.4369 | 0.5551 | 0.6305 | 2.88M | 632.00M |
+  | Real + imaginary | 0.3077 | 0.3671 | 0.4308 | 0.5475 | 0.6239 | 2.88M | 632.00M |
+
+  This ablation shows that, in our setting, providing the complex spectrum explicitly does not improve over amplitude alone. This supports our claim that simply exposing phase information is not sufficient for effective exploitation in our detection setting.
+
+  The same conclusion is visible when looking at the training dynamics across epochs. For completeness, we include below the corresponding curves for mAP, loss, and recall:
+
+  ![mAP vs epochs](assets/map_vs_epochs.png)
+
+  ![Loss vs epochs](assets/loss_vs_epochs.png)
+
+  ![Recall vs epochs](assets/recall_vs_epochs.png)
 
 - **(ii) Complex-valued neural networks.**
 
-  A more principled alternative consists in designing neural networks that operate directly in the complex domain. As discussed in *“Complex-Valued Neural Networks: A Comprehensive Survey” by ChiYan Lee and Hideyuki Hasegawa*, such models offer a theoretically appealing framework but introduce practical challenges. In particular, they suffer from numerical instability during training.
+  A more principled alternative consists in designing neural networks that operate directly in the complex domain. As discussed in the survey literature [4], such models offer a theoretically appealing framework but introduce practical challenges. In particular, they suffer from numerical instability during training.
 
-  In the context of object detection, *“CV-YOLO: A Complex-Valued Convolutional Neural Network for Oriented Ship Detection in Single-Polarization Single-Look Complex SAR Images” by Dandan Zhao et al.* proposes a complex-valued extension of YOLO for SAR image analysis. Their results indicate that complex-valued modeling can provide improvements (approximately +1.4% mAP50 and +0.5% mAP50:95) compared to real-valued models with a similar number of parameters. However, this gain comes at a significant computational cost, with FLOPs roughly doubling due to complex-valued operations.
+  In the context of object detection, CV-YOLO [5] proposes a complex-valued extension of YOLO for SAR image analysis. Their results indicate that complex-valued modeling can provide improvements (approximately +1.4% mAP50 and +0.5% mAP50:95) compared to real-valued models with a similar number of parameters. However, this gain comes at a significant computational cost, with FLOPs roughly doubling due to complex-valued operations.
 
-Overall, these observations suggest that while complex representations are theoretically complete and potentially beneficial, current convolutional neural networks struggle to effectively exploit phase information in practice, especially in noisy conditions. By leveraging multiple time-frequency resolutions, we expose the network to complementary structures that are more readily exploitable than raw phase information. Therefore, the proposed approach does not contradict the theoretical completeness of the STFT, but instead introduces a **meaningful inductive bias** that improves learning efficiency and robustness in realistic detection scenarios.
+Overall, these observations suggest that while complex representations are theoretically complete and potentially beneficial, current convolutional neural networks struggle to effectively exploit phase information in practice. By leveraging multiple time-frequency resolutions, we expose the network to complementary structures that are more readily exploitable than raw phase information. Therefore, the proposed approach does not contradict the theoretical completeness of the STFT, but instead introduces a **meaningful inductive bias** that improves learning efficiency and robustness in realistic detection scenarios.
+
+## References
+
+[1] H. Vincent Poor, *An Introduction to Signal Detection and Estimation*. Springer Science & Business Media, 2013.
+
+[2] L. Zhou, Y. Gao, Z. Wang, J. Li, and W. Zhang, “Complex spectral mapping with attention based convolution recurrent neural network for speech enhancement,” *arXiv preprint arXiv:2104.05267*, 2021.
+
+[3] Szu-Wei Fu, Ting-Yao Hu, Yu Tsao, and Xugang Lu, “Complex spectrogram enhancement by convolutional neural network with multi-metrics learning,” in *2017 IEEE 27th International Workshop on Machine Learning for Signal Processing (MLSP)*, pp. 1-6, IEEE, 2017.
+
+[4] ChiYan Lee, Hideyuki Hasegawa, and Shangce Gao, “Complex-valued neural networks: A comprehensive survey,” *IEEE/CAA Journal of Automatica Sinica*, vol. 9, no. 8, pp. 1406-1426, 2022.
+
+[5] Dandan Zhao, Zhe Zhang, Dongdong Lu, Xiaolan Qiu, Wei Li, Hang Li, and Yirong Wu, “CV-YOLO: A complex-valued convolutional neural network for oriented ship detection in single-polarization single-look complex SAR images,” *Remote Sensing*, vol. 17, no. 8, p. 1478, 2025.

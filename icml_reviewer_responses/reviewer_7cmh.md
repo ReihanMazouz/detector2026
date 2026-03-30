@@ -10,6 +10,16 @@ Se rapporter à la réponse faite à 2hiN.
 
 We agree that this point deserves a more explicit discussion. In short, although the complex STFT is theoretically information-preserving, current neural architectures do not necessarily exploit phase information effectively in practice, especially in low-SNR regimes. Our position is therefore not that multi-resolution STFTs recover information absent from a single complex spectrogram, but that they provide a more useful **inductive bias** for learning robust detectors.
 
+As a concise ablation summary, we compared three single-resolution input parameterizations with the same model YOLOv11n:
+
+| Representation | mAP50:95 | mAP50 | Recall low SNR | Recall medium SNR | Recall high SNR | Params | FLOPs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Amplitude only | 0.3396 | 0.3999 | 0.4420 | 0.5599 | 0.6327 | 2.88M | 629.64M |
+| Amplitude + phase | 0.3127 | 0.3833 | 0.4369 | 0.5551 | 0.6305 | 2.88M | 632.00M |
+| Real + imaginary | 0.3077 | 0.3671 | 0.4308 | 0.5475 | 0.6239 | 2.88M | 632.00M |
+
+This ablation indicates that, in our setting, explicitly providing the complex spectrum does not improve over amplitude alone. This is precisely why we frame the benefit of multi-resolution STFTs as a better inductive bias, rather than as recovery of information missing from a single complex spectrogram.
+
 For readability, we moved the full technical answer, including the discussion of real/imaginary inputs and complex-valued neural networks, to the standalone note [reviewer_7cmh_w2_detailed.md](/Users/tailleesarah/Documents/thèse/icml/detector2026/icml_reviewer_responses/reviewer_7cmh_w2_detailed.md).
 
 ## W3. Potential over-engineering
