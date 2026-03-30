@@ -32,7 +32,7 @@ In the revised version, we will add a **glossary in the appendix** to improve cl
 
 ## Key Question 3: Computational overhead and latency
 
-The appendix currently reports model forward time plus NMS, but not the preprocessing needed to compute multiple STFT spectrograms. This preprocessing costs about **0.46 ms on CPU** and **0.09 ms on an H100 GPU** per spectrogram.
+Indeed, the appendix currently reports model forward time plus NMS, but not the preprocessing needed to compute multiple STFT spectrograms. This preprocessing costs about **0.46 ms on CPU** and **0.09 ms on an H100 GPU** per spectrogram.
 
 The end-to-end comparison depends on the baseline:
 
@@ -46,6 +46,5 @@ The end-to-end comparison depends on the baseline:
 
 ## W3 and Key Question 4. Originality, conceptual contribution, and societal impact
 
-The contribution is primarily conceptual and architectural. The goal is not simply to aggregate several single-resolution detectors, but to learn a joint representation from complementary time-frequency resolutions within a single detection model.
+WWe agree that the societal impact discussion should be strengthened. While the method is motivated as a general approach for time-frequency detection and is relevant to benign applications such as acoustic monitoring and environmental sensing, RF signal detection technologies may also raise dual-use concerns. In particular, such methods could be used in surveillance, intelligence, or electronic-warfare contexts, and may therefore raise privacy, security, or governance issues if deployed without appropriate safeguards and oversight. We will include this discussion directly in the revised paper and clarify that the present work is methodological in nature rather than tied to a specific deployment scenario.
 
-We also agree that the societal impact discussion can be strengthened. A revised societal impact section will be included directly in the paper.

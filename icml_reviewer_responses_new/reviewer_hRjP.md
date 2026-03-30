@@ -4,11 +4,7 @@ We thank the reviewer for the detailed and technically insightful feedback.
 
 ## Q5 -> Q13: About the Oracle
 
-The original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition together with its interpretation as a recall and classification upper bound.
-
-### Conclusion and discussion of Q5--Q13
-
-The revised formulation and specification of the Oracle-OR should address most of the concerns raised in questions Q5 to Q13.
+The original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition together with its interpretation as a recall and classification upper bound; the corresponding standalone note is available here: [oracle_icml.pdf](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses_new/oracle_icml.pdf).
 
 ### Q5
 
