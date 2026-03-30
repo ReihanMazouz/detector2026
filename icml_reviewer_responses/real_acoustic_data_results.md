@@ -81,7 +81,7 @@ Relative to the best single-resolution configuration for each class, `MRS-YOLO` 
 
 Overall, the multi-resolution model provides consistent gains for the five biological classes, particularly for *Orcinus orca*, while maintaining near-perfect discrimination for *Megaptera novaeangliae*. 
 
-![Row-normalized confusion matrices](assets/acoustic_confusion_matrices_clean.png)
+![Row-normalized confusion matrix](assets/acoustic_confusion_matrices_clean.png)
 
 ## Processing Time
 
