@@ -4,47 +4,7 @@ We thank the reviewer for the detailed and technically insightful feedback.
 
 ## Q5 -> Q13: About the Oracle
 
-We agree that the original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition (see the standalone file [oracle_or_algorithm.tex](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/oracle_or_algorithm.tex)).
-
-### Formalization of the Oracle
-
-Let $\{\mathcal{P}_r\}_{r=1}^{R}$ be the post-NMS prediction sets from the $R$ single-resolution models, and $\mathcal{G}=\{(b_g,c_g)\}$ the ground-truth set.
-
-For each ground-truth instance $g=(b_g,c_g)$, we define the candidate set:
-
-\[
-\mathcal{M}_g = \left\{ p=(b_p,c_p,s_p)\in \bigcup_{r=1}^{R}\mathcal{P}_r \;:\; \mathrm{IoU}(b_p,b_g)\geq \tau \right\}.
-\]
-
-We then define the correctly classified subset:
-
-\[
-\mathcal{M}_g^{\mathrm{cls}} = \left\{ p\in \mathcal{M}_g \;:\; c_p = c_g \right\}.
-\]
-
-If $\mathcal{M}_g^{\mathrm{cls}}\neq\emptyset$, we retain this subset otherwise, we keep $\mathcal{M}_g$. The selected prediction is:
-
-$$
-p^*(g) = \arg\max_{p\in\mathcal{M}_g} \mathrm{IoU}(b_p,b_g).
-$$
-
-Predictions that do not intersect any ground-truth instance are treated as false alarms, with an additional redundancy filtering step applied to avoid counting overlapping false detections multiple times.
-
-### Interpretation: recall and classification upper bounds
-
-Under this definition, the oracle provides:
-
-- A **recall upper bound**: a ground-truth instance is detected if *any* single-resolution model detects it.
-
-- A **classification upper bound (conditional on detection)**: when evaluating classification accuracy (e.g., confusion matrices), only matched predictions are considered. Since the oracle retains a correctly classified prediction whenever one exists in $\mathcal{M}_g$, it achieves the best possible classification performance given the detections.
-
-- **No upper bound on mAP**: although the oracle maximizes recall by construction, it aggregates false positives from all resolutions. An additional IoU-based suppression step removes part of the redundant detections, but the total number of false positives increases, which degrades precision.
-
-\[
-\mathrm{Precision}_{\mathrm{oracle}} = \frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FP}_{\mathrm{oracle}}}.
-\]
-
-Since mAP depends on the full precision-recall curve and on the ranking induced by confidence scores (which remain unchanged), **the oracle is not guaranteed to maximize mAP**.
+We agree that the original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition together with its interpretation as a recall and classification upper bound. To keep the main response concise, we refer the reviewer to the standalone PDF note: [oracle_icml.pdf](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/oracle_icml.pdf).
 
 ### Conclusion and discussion of Q5--Q13
 
