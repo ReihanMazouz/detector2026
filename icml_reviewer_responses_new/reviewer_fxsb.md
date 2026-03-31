@@ -10,7 +10,7 @@ We agree that a decision-level ensemble (e.g., merging predictions from multiple
 
 Instead, we can clarify our design choice. We intentionally introduced the Oracle baseline to isolate the contribution of multi-resolution learning. The Oracle ensures that the limitation does not stem from post-processing, but rather from the inability of single-resolution models to capture complementary information.
 
-As also noted by Reviewer hRjP, this Oracle baseline would benefit from additional clarification. The corresponding algorithm is available here: [oracle_algorithm.pdf](https://github.com/ICMLanonymous2026/MRS_YOLO_ICML26/blob/main/icml_reviewer_responses/oracle_icml.pdf).
+As also noted by Reviewer hRjP, this Oracle baseline would benefit from additional clarification. The corresponding algorithm is available here: [oracle_algorithm.pdf](https://github.com/ICMLanonymous2026/MRS_YOLO_ICML26/blob/main/icml_reviewer_responses/oracle_algorithm.pdf).
 
 **W3 and Key Question 2. Sensitivity to the number of resolutions**
 

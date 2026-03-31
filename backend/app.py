@@ -14,7 +14,7 @@ from .datasets import (
     sample_preview_payload,
     training_dataset_info,
 )
-from .evaluation import evaluation_recall_snr, evaluation_run_details, list_evaluation_runs
+from .evaluation import evaluation_confusion_matrices, evaluation_recall_snr, evaluation_run_details, list_evaluation_runs
 from .inference import artifacts_preview_payload
 from .training import (
     cancel_training_run,
@@ -133,6 +133,11 @@ def evaluation_run(path: str) -> Dict[str, Any]:
 @app.get("/evaluation/run/recall-snr")
 def evaluation_run_recall_snr(path: str, epoch: int) -> Dict[str, Any]:
     return evaluation_recall_snr(path, epoch=epoch)
+
+
+@app.get("/evaluation/run/confusion-matrices")
+def evaluation_run_confusion_matrices(path: str, epoch: int) -> Dict[str, Any]:
+    return evaluation_confusion_matrices(path, epoch=epoch)
 
 
 @app.post("/training/start")

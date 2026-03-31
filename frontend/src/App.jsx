@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 
 const DEFAULT_API_BASE = "http://127.0.0.1:8001";
 const EXAMPLES_PAGE_SIZE = 200;
@@ -81,12 +81,39 @@ const DEFAULT_EVALUATION_RUN_INPUTS = [
 ];
 
 const EVALUATION_VIEWS = [
-  { id: "map_vs_flops", label: "mAP vs FLOPs" },
-  { id: "map_vs_params", label: "mAP vs Params" },
+  { id: "map_vs_model_cost", label: "mAP vs FLOPs / Params" },
+  { id: "confusion_matrices", label: "Confusion matrices" },
   { id: "best_recall_vs_snr", label: "Best recall vs snr" },
   { id: "map_vs_epochs", label: "Map vs epochs" },
   { id: "loss_vs_epochs", label: "Loss vs epochs" },
   { id: "recall_vs_epochs", label: "Recall vs epochs" },
+];
+
+const EVALUATION_SCATTER_X_OPTIONS = [
+  { id: "flops", label: "FLOPs" },
+  { id: "params", label: "Params" },
+];
+
+const EVALUATION_SCATTER_METRIC_OPTIONS = [
+  { id: "map50_95", label: "mAP50:95", marker: "circle" },
+  { id: "map50", label: "mAP50", marker: "square" },
+];
+
+const EVALUATION_CONFUSION_SNR_OPTIONS = [
+  { id: "low_snr", label: "Low SNR" },
+  { id: "medium_snr", label: "Medium SNR" },
+  { id: "high_snr", label: "High SNR" },
+];
+
+const EVALUATION_CONFUSION_MODES = [
+  { id: "single", label: "Matrice seule" },
+  { id: "difference", label: "Difference A - B" },
+];
+
+const EVALUATION_CONFUSION_NORMALIZATION_OPTIONS = [
+  { id: "none", label: "Aucune" },
+  { id: "row", label: "Par ligne" },
+  { id: "column", label: "Par colonne" },
 ];
 
 function normalizeApiBase(value) {
@@ -1643,10 +1670,24 @@ function TrainingPage({ apiFetch }) {
 function EvaluationPage({ apiFetch }) {
   const [runInputs, setRunInputs] = useState(DEFAULT_EVALUATION_RUN_INPUTS);
   const [loadedRunsState, setLoadedRunsState] = useState({ status: "idle", runs: [], error: null });
-  const [visualizationId, setVisualizationId] = useState("map_vs_flops");
+  const [visualizationId, setVisualizationId] = useState("map_vs_model_cost");
+  const [scatterXAxis, setScatterXAxis] = useState("flops");
+  const [scatterMetricSelection, setScatterMetricSelection] = useState({
+    map50_95: true,
+    map50: false,
+  });
   const [recallSNRState, setRecallSNRState] = useState({ status: "idle", curves: [], error: null });
+  const [confusionSnrBand, setConfusionSnrBand] = useState("low_snr");
+  const [confusionMode, setConfusionMode] = useState("single");
+  const [confusionNormalization, setConfusionNormalization] = useState("none");
+  const [confusionPrimaryRunLabel, setConfusionPrimaryRunLabel] = useState("");
+  const [confusionReferenceRunLabel, setConfusionReferenceRunLabel] = useState("");
+  const [confusionMatrixState, setConfusionMatrixState] = useState({ status: "idle", matrices: [], error: null });
 
   const selectedVisualization = EVALUATION_VIEWS.find((item) => item.id === visualizationId) ?? EVALUATION_VIEWS[0];
+  const selectedScatterMetricKeys = EVALUATION_SCATTER_METRIC_OPTIONS
+    .filter((item) => scatterMetricSelection[item.id])
+    .map((item) => item.id);
 
   async function loadRunsFromInputs() {
     const entries = runInputs
@@ -1734,6 +1775,75 @@ function EvaluationPage({ apiFetch }) {
     })();
   }, [apiFetch, loadedRunsState.runs, visualizationId]);
 
+  useEffect(() => {
+    const matrices = confusionMatrixState.matrices ?? [];
+    if (!matrices.length) {
+      setConfusionPrimaryRunLabel("");
+      setConfusionReferenceRunLabel("");
+      return;
+    }
+
+    setConfusionPrimaryRunLabel((current) => {
+      if (current && matrices.some((item) => item.label === current)) {
+        return current;
+      }
+      return matrices[0].label;
+    });
+
+    setConfusionReferenceRunLabel((current) => {
+      if (
+        current &&
+        matrices.some((item) => item.label === current) &&
+        current !== (confusionPrimaryRunLabel || matrices[0].label)
+      ) {
+        return current;
+      }
+      const fallback = matrices.find((item) => item.label !== (confusionPrimaryRunLabel || matrices[0].label));
+      return fallback?.label ?? "";
+    });
+  }, [confusionMatrixState.matrices, confusionPrimaryRunLabel]);
+
+  useEffect(() => {
+    if (visualizationId !== "confusion_matrices" || !loadedRunsState.runs.length) {
+      setConfusionMatrixState({ status: "idle", matrices: [], error: null });
+      return;
+    }
+
+    void (async () => {
+      setConfusionMatrixState({ status: "loading", matrices: [], error: null });
+      try {
+        const matrices = await Promise.all(
+          loadedRunsState.runs.map(async (run) => {
+            const epoch = run.detail?.summary?.best_snapshots?.checkpoint?.epoch;
+            if (!epoch) {
+              throw new Error(`Aucun epoch de best checkpoint disponible pour ${run.label}.`);
+            }
+            const response = await apiFetch(
+              `/evaluation/run/confusion-matrices?path=${encodeURIComponent(run.path)}&epoch=${encodeURIComponent(epoch)}`
+            );
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(`${run.label}: ${extractApiError(data, response.status).message}`);
+            }
+            return {
+              label: run.label,
+              epoch,
+              classLabels: data.class_labels ?? [],
+              matrices: data.matrices ?? {},
+            };
+          })
+        );
+        setConfusionMatrixState({ status: "ready", matrices, error: null });
+      } catch (error) {
+        setConfusionMatrixState({
+          status: "error",
+          matrices: [],
+          error: error instanceof Error ? error.message : "Erreur inconnue."
+        });
+      }
+    })();
+  }, [apiFetch, loadedRunsState.runs, visualizationId]);
+
   function updateRunInput(index, key, value) {
     setRunInputs((current) => current.map((item, itemIndex) => (
       itemIndex === index ? { ...item, [key]: value } : item
@@ -1746,6 +1856,20 @@ function EvaluationPage({ apiFetch }) {
 
   function removeRunInput(index) {
     setRunInputs((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  function toggleScatterMetric(metricId) {
+    setScatterMetricSelection((current) => {
+      const nextValue = !current[metricId];
+      const activeCount = Object.values(current).filter(Boolean).length;
+      if (!nextValue && activeCount === 1) {
+        return current;
+      }
+      return {
+        ...current,
+        [metricId]: nextValue,
+      };
+    });
   }
 
   const loadedRuns = loadedRunsState.runs ?? [];
@@ -1830,7 +1954,7 @@ function EvaluationPage({ apiFetch }) {
           <div className="section-title">
             <span>Visualisation</span>
             <h2>Ce que tu veux voir</h2>
-            <p>Choisis une seule vue a la fois pour garder un affichage simple et coherent.</p>
+            <p>Choisis une seule vue a la fois, puis ajuste ses options quand c&apos;est necessaire.</p>
           </div>
           <div className="evaluation-visual-picker">
             {EVALUATION_VIEWS.map((view) => (
@@ -1844,6 +1968,148 @@ function EvaluationPage({ apiFetch }) {
               </button>
             ))}
           </div>
+          {visualizationId === "map_vs_model_cost" ? (
+            <div className="evaluation-visual-options">
+              <div className="evaluation-control-group">
+                <strong>Axe des abscisses</strong>
+                <p>Le scatter plot utilise soit les FLOPs, soit le nombre de parametres.</p>
+                <div className="evaluation-chip-row">
+                  {EVALUATION_SCATTER_X_OPTIONS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`evaluation-chip ${scatterXAxis === option.id ? "evaluation-chip-active" : ""}`}
+                      onClick={() => setScatterXAxis(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="evaluation-control-group">
+                <strong>Metriques affichees</strong>
+                <p>Coche une ou deux metriques de mAP a tracer sur la meme vue.</p>
+                <div className="evaluation-checkbox-grid">
+                  {EVALUATION_SCATTER_METRIC_OPTIONS.map((option) => {
+                    const isChecked = Boolean(scatterMetricSelection[option.id]);
+                    const isLastActive = isChecked && selectedScatterMetricKeys.length === 1;
+                    return (
+                      <label
+                        key={option.id}
+                        className={`evaluation-checkbox-card ${isChecked ? "evaluation-checkbox-card-active" : ""}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleScatterMetric(option.id)}
+                          disabled={isLastActive}
+                        />
+                        <div>
+                          <strong>{option.label}</strong>
+                          <small>{option.marker === "circle" ? "Marqueur rond" : "Marqueur carre"}</small>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {visualizationId === "confusion_matrices" ? (
+            <div className="evaluation-visual-options">
+              <div className="evaluation-control-group">
+                <strong>Mode d&apos;affichage</strong>
+                <p>Affiche soit une matrice seule, soit la difference entre deux runs charges.</p>
+                <div className="evaluation-chip-row">
+                  {EVALUATION_CONFUSION_MODES.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`evaluation-chip ${confusionMode === option.id ? "evaluation-chip-active" : ""}`}
+                      onClick={() => setConfusionMode(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="evaluation-control-group">
+                <strong>Tranche de SNR</strong>
+                <p>Affiche la matrice de confusion calculee sur faible, moyen ou fort SNR.</p>
+                <div className="evaluation-chip-row">
+                  {EVALUATION_CONFUSION_SNR_OPTIONS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`evaluation-chip ${confusionSnrBand === option.id ? "evaluation-chip-active" : ""}`}
+                      onClick={() => setConfusionSnrBand(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="evaluation-control-group">
+                <strong>Normalisation</strong>
+                <p>Choisis si la matrice doit rester brute, etre normalisee par ligne, ou par colonne.</p>
+                <div className="evaluation-chip-row">
+                  {EVALUATION_CONFUSION_NORMALIZATION_OPTIONS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`evaluation-chip ${confusionNormalization === option.id ? "evaluation-chip-active" : ""}`}
+                      onClick={() => setConfusionNormalization(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="evaluation-control-group">
+                <strong>Selection des runs</strong>
+                <p>Choisis le run principal A, puis eventuellement un run B pour afficher `A - B`.</p>
+                <div className="evaluation-select-grid">
+                  <label className="field">
+                    <span>Run A</span>
+                    <select
+                      value={confusionPrimaryRunLabel}
+                      onChange={(event) => {
+                        const nextLabel = event.target.value;
+                        setConfusionPrimaryRunLabel(nextLabel);
+                        if (nextLabel === confusionReferenceRunLabel) {
+                          const fallback = (confusionMatrixState.matrices ?? []).find((item) => item.label !== nextLabel);
+                          setConfusionReferenceRunLabel(fallback?.label ?? "");
+                        }
+                      }}
+                    >
+                      {(confusionMatrixState.matrices ?? []).map((item) => (
+                        <option key={`primary-${item.label}`} value={item.label}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {confusionMode === "difference" ? (
+                    <label className="field">
+                      <span>Run B</span>
+                      <select
+                        value={confusionReferenceRunLabel}
+                        onChange={(event) => setConfusionReferenceRunLabel(event.target.value)}
+                      >
+                        {(confusionMatrixState.matrices ?? [])
+                          .filter((item) => item.label !== confusionPrimaryRunLabel)
+                          .map((item) => (
+                            <option key={`reference-${item.label}`} value={item.label}>
+                              {item.label}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <section className="panel panel-span-12">
@@ -1858,7 +2124,15 @@ function EvaluationPage({ apiFetch }) {
             <EvaluationRender
               loadedRuns={loadedRuns}
               visualizationId={visualizationId}
+              scatterXAxis={scatterXAxis}
+              selectedScatterMetricKeys={selectedScatterMetricKeys}
               recallSNRState={recallSNRState}
+              confusionSnrBand={confusionSnrBand}
+              confusionMode={confusionMode}
+              confusionNormalization={confusionNormalization}
+              confusionPrimaryRunLabel={confusionPrimaryRunLabel}
+              confusionReferenceRunLabel={confusionReferenceRunLabel}
+              confusionMatrixState={confusionMatrixState}
             />
           ) : null}
         </section>
@@ -1879,45 +2153,117 @@ function EvaluationPage({ apiFetch }) {
   );
 }
 
-function EvaluationRender({ loadedRuns, visualizationId, recallSNRState }) {
-  if (visualizationId === "map_vs_flops" || visualizationId === "map_vs_params") {
-    const metricKey = visualizationId === "map_vs_flops" ? "flops" : "params";
-    const chartTitle = visualizationId === "map_vs_flops" ? "mAP50:95 vs FLOPs" : "mAP50:95 vs Params";
+function EvaluationRender({
+  loadedRuns,
+  visualizationId,
+  scatterXAxis,
+  selectedScatterMetricKeys,
+  recallSNRState,
+  confusionSnrBand,
+  confusionMode,
+  confusionNormalization,
+  confusionPrimaryRunLabel,
+  confusionReferenceRunLabel,
+  confusionMatrixState
+}) {
+  if (visualizationId === "map_vs_model_cost") {
+    const palette = ["#c8742f", "#3f566b", "#8b4c18", "#5e7e95"];
+    const xAxisOption = EVALUATION_SCATTER_X_OPTIONS.find((item) => item.id === scatterXAxis) ?? EVALUATION_SCATTER_X_OPTIONS[0];
+    const selectedMetricOptions = EVALUATION_SCATTER_METRIC_OPTIONS.filter((item) => selectedScatterMetricKeys.includes(item.id));
+    const yLabel = selectedMetricOptions.length === 1 ? selectedMetricOptions[0].label : "mAP";
+    const chartTitle = `${yLabel} vs ${xAxisOption.label}`;
     const chartSubtitle =
-      visualizationId === "map_vs_flops"
-        ? "Chaque point represente le best checkpoint du run place selon ses FLOPs."
-        : "Chaque point represente le best checkpoint du run place selon son nombre de parametres.";
-    const xLabel = visualizationId === "map_vs_flops" ? "FLOPs" : "Params";
+      selectedMetricOptions.length === 2
+        ? "Chaque run peut afficher deux marqueurs sur le meme axe X: un pour mAP50:95 et un pour mAP50."
+        : `Chaque point represente le best checkpoint du run place selon ${xAxisOption.label}.`;
 
-    const points = loadedRuns
+    const runSummaries = loadedRuns
       .map((run, index) => {
         const checkpoint = run.detail?.summary?.best_snapshots?.checkpoint;
-        const x = checkpoint?.model_info?.[metricKey];
-        const y = checkpoint?.metrics?.map50_95;
-        if (x === null || x === undefined || y === null || y === undefined) {
+        const x = checkpoint?.model_info?.[scatterXAxis];
+        if (x === null || x === undefined) {
           return null;
         }
         return {
           label: run.label,
-          color: ["#c8742f", "#3f566b", "#8b4c18", "#5e7e95"][index % 4],
+          color: palette[index % palette.length],
           x: Number(x),
-          y: Number(y),
           epoch: checkpoint?.epoch,
-          map50: checkpoint?.metrics?.map50,
+          metrics: {
+            map50_95: checkpoint?.metrics?.map50_95,
+            map50: checkpoint?.metrics?.map50,
+          },
         };
       })
       .filter(Boolean);
+
+    const points = runSummaries.flatMap((run) =>
+      selectedMetricOptions.flatMap((metricOption) => {
+        const y = run.metrics?.[metricOption.id];
+        if (y === null || y === undefined) {
+          return [];
+        }
+        return [{
+          label: `${run.label}${selectedMetricOptions.length > 1 ? ` · ${metricOption.label}` : ""}`,
+          runLabel: run.label,
+          color: run.color,
+          x: run.x,
+          y: Number(y),
+          epoch: run.epoch,
+          metricKey: metricOption.id,
+          metricLabel: metricOption.label,
+          marker: metricOption.marker,
+        }];
+      })
+    );
 
     return (
       <div className="evaluation-render-stack">
         <ScatterComparisonChart
           title={chartTitle}
           subtitle={chartSubtitle}
-          xLabel={xLabel}
-          yLabel="mAP50:95"
-          xMetricKey={metricKey}
-          yMetricKey="map50_95"
+          xLabel={xAxisOption.label}
+          yLabel={yLabel}
+          xMetricKey={scatterXAxis}
+          yMetricKey={selectedMetricOptions[0]?.id ?? "map50_95"}
+          selectedMetricKeys={selectedScatterMetricKeys}
+          runSummaries={runSummaries}
           points={points}
+        />
+      </div>
+    );
+  }
+
+  if (visualizationId === "confusion_matrices") {
+    if (confusionMatrixState.status === "loading") {
+      return <p className="dashboard-empty">Chargement des matrices de confusion...</p>;
+    }
+    if (confusionMatrixState.error) {
+      return <p className="dashboard-empty">{confusionMatrixState.error}</p>;
+    }
+
+    const items = confusionMatrixState.matrices ?? [];
+    const primaryItem = items.find((item) => item.label === confusionPrimaryRunLabel) ?? items[0] ?? null;
+    const referenceItem = confusionMode === "difference"
+      ? items.find((item) => item.label === confusionReferenceRunLabel && item.label !== primaryItem?.label) ?? null
+      : null;
+
+    if (!primaryItem) {
+      return <p className="dashboard-empty">Aucune matrice de confusion chargee.</p>;
+    }
+    if (confusionMode === "difference" && !referenceItem) {
+      return <p className="dashboard-empty">Charge au moins deux runs pour afficher une difference de matrices.</p>;
+    }
+
+    return (
+      <div className="evaluation-render-stack">
+        <ConfusionMatrixView
+          title={`Confusion matrices · ${(EVALUATION_CONFUSION_SNR_OPTIONS.find((item) => item.id === confusionSnrBand)?.label) ?? confusionSnrBand}`}
+          mode={confusionMode}
+          normalization={confusionNormalization}
+          primaryItem={primaryItem}
+          referenceItem={referenceItem}
+          snrBand={confusionSnrBand}
         />
       </div>
     );
@@ -2030,27 +2376,87 @@ function EvaluationRender({ loadedRuns, visualizationId, recallSNRState }) {
   );
 }
 
-function ScatterComparisonChart({ title, subtitle, xLabel, yLabel, xMetricKey, yMetricKey, points }) {
+function ScatterComparisonChart({
+  title,
+  subtitle,
+  xLabel,
+  yLabel,
+  xMetricKey,
+  yMetricKey,
+  selectedMetricKeys,
+  runSummaries,
+  points
+}) {
+  const [hiddenRunLabels, setHiddenRunLabels] = useState({});
+  const [hoveredPoint, setHoveredPoint] = useState(null);
+  const [inspectedRunLabel, setInspectedRunLabel] = useState(null);
+  const runSignature = (runSummaries ?? []).map((run) => run.label).join("|");
+
+  useEffect(() => {
+    setHiddenRunLabels({});
+    setHoveredPoint(null);
+    setInspectedRunLabel(null);
+  }, [runSignature]);
+
   if (!points?.length) {
     return <p className="dashboard-empty">Pas assez de donnees pour afficher {title.toLowerCase()}.</p>;
+  }
+
+  const visibleRunSummaries = (runSummaries ?? []).filter((run) => !hiddenRunLabels[run.label]);
+  const visiblePoints = points.filter((point) => !hiddenRunLabels[point.runLabel]);
+  if (!visiblePoints.length) {
+    return <p className="dashboard-empty">Au moins un run doit rester visible pour afficher {title.toLowerCase()}.</p>;
   }
 
   const width = 960;
   const height = 360;
   const padding = 42;
-  const minX = Math.min(...points.map((point) => point.x));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxY = Math.max(...points.map((point) => point.y));
+  const minX = Math.min(...visiblePoints.map((point) => point.x));
+  const maxX = Math.max(...visiblePoints.map((point) => point.x));
+  const minY = Math.min(...visiblePoints.map((point) => point.y));
+  const maxY = Math.max(...visiblePoints.map((point) => point.y));
   const safeMaxX = minX === maxX ? maxX + 1 : maxX;
   const safeMaxY = minY === maxY ? maxY + 1 : maxY;
   const xTicks = [0, 1, 2, 3].map((index) => minX + ((safeMaxX - minX) / 3) * index);
   const yTicks = [0, 1, 2, 3].map((index) => minY + ((safeMaxY - minY) / 3) * (3 - index));
+  const activeRunLabel = hoveredPoint?.runLabel ?? inspectedRunLabel;
+  const selectedMetricOptions = EVALUATION_SCATTER_METRIC_OPTIONS.filter((item) => selectedMetricKeys.includes(item.id));
 
   function pointToCoords(point) {
     const x = padding + ((point.x - minX) / Math.max(1e-9, safeMaxX - minX)) * (width - padding * 2);
     const y = height - padding - ((point.y - minY) / Math.max(1e-9, safeMaxY - minY)) * (height - padding * 2);
     return { x, y };
+  }
+
+  function renderPoint(point, coords) {
+    if (point.marker === "square") {
+      return (
+        <>
+          <rect x={coords.x - 8} y={coords.y - 8} width="16" height="16" rx="3" fill={point.color} opacity="0.14" />
+          <rect x={coords.x - 5.5} y={coords.y - 5.5} width="11" height="11" rx="2" fill={point.color} opacity="0.94" />
+        </>
+      );
+    }
+    return (
+      <>
+        <circle cx={coords.x} cy={coords.y} r="12" fill={point.color} opacity="0.14" />
+        <circle cx={coords.x} cy={coords.y} r="7" fill={point.color} opacity="0.94" />
+      </>
+    );
+  }
+
+  function toggleRunVisibility(runLabel) {
+    setHiddenRunLabels((current) => {
+      const nextHidden = !current[runLabel];
+      const visibleCount = (runSummaries ?? []).filter((run) => !current[run.label]).length;
+      if (nextHidden && visibleCount === 1) {
+        return current;
+      }
+      return {
+        ...current,
+        [runLabel]: nextHidden,
+      };
+    });
   }
 
   return (
@@ -2068,68 +2474,146 @@ function ScatterComparisonChart({ title, subtitle, xLabel, yLabel, xMetricKey, y
         <span>Axe X: {xLabel}</span>
         <span>Axe Y: {yLabel}</span>
         <span>Chaque point = best checkpoint d&apos;un run</span>
+        {selectedMetricOptions.map((metricOption) => (
+          <span key={metricOption.id}>
+            {metricOption.marker === "circle" ? "Rond" : "Carre"} = {metricOption.label}
+          </span>
+        ))}
+        <span>{visibleRunSummaries.length} / {(runSummaries ?? []).length} runs visibles</span>
       </div>
-      <svg className="evaluation-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
-        {[0, 1, 2, 3].map((index) => {
-          const y = padding + ((height - padding * 2) / 3) * index;
-          return <line key={`h-${index}`} x1={padding} y1={y} x2={width - padding} y2={y} className="evaluation-chart-grid" />;
-        })}
-        {[0, 1, 2, 3].map((index) => {
-          const x = padding + ((width - padding * 2) / 3) * index;
-          return <line key={`v-${index}`} x1={x} y1={padding} x2={x} y2={height - padding} className="evaluation-chart-grid" />;
-        })}
-        {points.map((point) => {
-          const coords = pointToCoords(point);
-          return (
-            <g key={point.label}>
-              <circle cx={coords.x} cy={coords.y} r="7" fill={point.color} opacity="0.92" />
-              <circle cx={coords.x} cy={coords.y} r="12" fill={point.color} opacity="0.14" />
-              <text x={coords.x + 10} y={coords.y - 10} className="evaluation-chart-point-label">
-                {point.label}
-              </text>
-            </g>
-          );
-        })}
-        <text x={width / 2} y={height - 8} textAnchor="middle" className="evaluation-chart-axis-title">
-          {xLabel}
-        </text>
-        <text
-          x={14}
-          y={height / 2}
-          textAnchor="middle"
-          transform={`rotate(-90 14 ${height / 2})`}
-          className="evaluation-chart-axis-title"
+      <div className="evaluation-chart-frame">
+        <svg
+          className="evaluation-chart"
+          viewBox={`0 0 ${width} ${height}`}
+          role="img"
+          aria-label={title}
+          onMouseLeave={() => setHoveredPoint(null)}
         >
-          {yLabel}
-        </text>
-        {xTicks.map((tick, index) => {
-          const x = padding + ((tick - minX) / Math.max(1e-9, safeMaxX - minX)) * (width - padding * 2);
-          return (
-            <text key={`x-tick-${index}`} x={x} y={height - 20} textAnchor="middle" className="evaluation-chart-tick">
-              {formatLargeNumber(tick)}
-            </text>
-          );
-        })}
-        {yTicks.map((tick, index) => {
-          const y = padding + ((height - padding * 2) / 3) * index + 4;
-          return (
-            <text key={`y-tick-${index}`} x={padding - 10} y={y} textAnchor="end" className="evaluation-chart-tick">
-              {formatMetricValue(yMetricKey, tick)}
-            </text>
-          );
-        })}
-      </svg>
-      <div className="evaluation-chart-legend">
-        {points.map((point) => (
-          <div key={point.label} className="evaluation-chart-legend-item">
-            <span className="evaluation-chart-legend-swatch" style={{ backgroundColor: point.color }} />
-            <div>
-              <strong>{point.label}</strong>
-              <small>
-                {xLabel} {formatLargeNumber(point.x)} · mAP50:95 {formatMetricValue("map50_95", point.y)}
-              </small>
-            </div>
+          {[0, 1, 2, 3].map((index) => {
+            const y = padding + ((height - padding * 2) / 3) * index;
+            return <line key={`h-${index}`} x1={padding} y1={y} x2={width - padding} y2={y} className="evaluation-chart-grid" />;
+          })}
+          {[0, 1, 2, 3].map((index) => {
+            const x = padding + ((width - padding * 2) / 3) * index;
+            return <line key={`v-${index}`} x1={x} y1={padding} x2={x} y2={height - padding} className="evaluation-chart-grid" />;
+          })}
+          {hoveredPoint ? (
+            <>
+              <line
+                x1={padding}
+                y1={hoveredPoint.coords.y}
+                x2={width - padding}
+                y2={hoveredPoint.coords.y}
+                className="evaluation-chart-guide-line"
+              />
+              <line
+                x1={hoveredPoint.coords.x}
+                y1={padding}
+                x2={hoveredPoint.coords.x}
+                y2={height - padding}
+                className="evaluation-chart-guide-line"
+              />
+            </>
+          ) : null}
+          {visiblePoints.map((point) => {
+            const coords = pointToCoords(point);
+            const isActive = activeRunLabel ? activeRunLabel === point.runLabel : true;
+            const pointOpacity = isActive ? 1 : 0.26;
+            const shouldShowLabel = hoveredPoint
+              ? hoveredPoint.runLabel === point.runLabel && hoveredPoint.metricKey === point.metricKey
+              : activeRunLabel === point.runLabel;
+            return (
+              <g
+                key={`${point.runLabel}-${point.metricKey}`}
+                opacity={pointOpacity}
+                onMouseEnter={() => setHoveredPoint({ ...point, coords })}
+              >
+                {renderPoint(point, coords)}
+                <circle
+                  cx={coords.x}
+                  cy={coords.y}
+                  r="16"
+                  fill="transparent"
+                  className="evaluation-chart-point-hitbox"
+                />
+                {shouldShowLabel ? (
+                  <text x={coords.x + 10} y={coords.y - 10} className="evaluation-chart-point-label">
+                    {point.label}
+                  </text>
+                ) : null}
+              </g>
+            );
+          })}
+          <text x={width / 2} y={height - 8} textAnchor="middle" className="evaluation-chart-axis-title">
+            {xLabel}
+          </text>
+          <text
+            x={14}
+            y={height / 2}
+            textAnchor="middle"
+            transform={`rotate(-90 14 ${height / 2})`}
+            className="evaluation-chart-axis-title"
+          >
+            {yLabel}
+          </text>
+          {xTicks.map((tick, index) => {
+            const x = padding + ((tick - minX) / Math.max(1e-9, safeMaxX - minX)) * (width - padding * 2);
+            return (
+              <text key={`x-tick-${index}`} x={x} y={height - 20} textAnchor="middle" className="evaluation-chart-tick">
+                {formatLargeNumber(tick)}
+              </text>
+            );
+          })}
+          {yTicks.map((tick, index) => {
+            const y = padding + ((height - padding * 2) / 3) * index + 4;
+            return (
+              <text key={`y-tick-${index}`} x={padding - 10} y={y} textAnchor="end" className="evaluation-chart-tick">
+                {formatMetricValue(yMetricKey, tick)}
+              </text>
+            );
+          })}
+        </svg>
+        {hoveredPoint ? (
+          <div
+            className="evaluation-chart-tooltip"
+            style={{
+              left: `${(hoveredPoint.coords.x / width) * 100}%`,
+              top: `${(hoveredPoint.coords.y / height) * 100}%`,
+            }}
+          >
+            <strong>{hoveredPoint.runLabel}</strong>
+            <span>{hoveredPoint.metricLabel}</span>
+            <span>{xLabel}: {formatLargeNumber(hoveredPoint.x)}</span>
+            <span>{hoveredPoint.metricLabel}: {formatMetricValue(hoveredPoint.metricKey, hoveredPoint.y)}</span>
+            {hoveredPoint.epoch !== null && hoveredPoint.epoch !== undefined ? <span>Epoch: {formatCount(hoveredPoint.epoch)}</span> : null}
           </div>
+        ) : null}
+      </div>
+      <div className="evaluation-chart-legend">
+        {(runSummaries ?? []).map((run) => (
+          <button
+            key={run.label}
+            type="button"
+            className={`evaluation-chart-legend-item ${hiddenRunLabels[run.label] ? "evaluation-chart-legend-item-muted" : ""} ${activeRunLabel === run.label ? "evaluation-chart-legend-item-active" : ""}`}
+            onClick={() => toggleRunVisibility(run.label)}
+            onMouseEnter={() => setInspectedRunLabel(run.label)}
+            onMouseLeave={() => setInspectedRunLabel(null)}
+          >
+            <span className="evaluation-chart-legend-swatch" style={{ backgroundColor: run.color }} />
+            <div>
+              <strong>{run.label}</strong>
+              <small>
+                {xLabel} {formatLargeNumber(run.x)}
+              </small>
+              <div className="evaluation-chart-legend-metrics">
+                {selectedMetricOptions.map((metricOption) => (
+                  <span key={`${run.label}-${metricOption.id}`}>
+                    {metricOption.label} {formatMetricValue(metricOption.id, run.metrics?.[metricOption.id])}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </button>
         ))}
       </div>
     </section>
@@ -2150,24 +2634,58 @@ function buildEpochSeries(loadedRuns, metricKey) {
 }
 
 function ComparisonChart({ title, subtitle, xLabel, yLabel, metricKey, series }) {
+  const [hiddenSeriesLabels, setHiddenSeriesLabels] = useState({});
+  const [hoveredPoint, setHoveredPoint] = useState(null);
+  const [inspectedSeriesLabel, setInspectedSeriesLabel] = useState(null);
+  const seriesSignature = (series ?? []).map((item) => item.label).join("|");
+
+  useEffect(() => {
+    setHiddenSeriesLabels({});
+    setHoveredPoint(null);
+    setInspectedSeriesLabel(null);
+  }, [seriesSignature]);
+
   if (!series?.length) {
     return <p className="dashboard-empty">Pas assez de donnees pour afficher {title.toLowerCase()}.</p>;
+  }
+
+  const visibleSeries = series.filter((item) => !hiddenSeriesLabels[item.label]);
+  if (!visibleSeries.length) {
+    return <p className="dashboard-empty">Au moins une serie doit rester visible pour afficher {title.toLowerCase()}.</p>;
   }
 
   const width = 960;
   const height = 340;
   const padding = 34;
-  const allPoints = series.flatMap((item) => item.points);
+  const allPoints = visibleSeries.flatMap((item) => item.points);
   const minX = Math.min(...allPoints.map((point) => point.x));
   const maxX = Math.max(...allPoints.map((point) => point.x));
   const minY = Math.min(...allPoints.map((point) => point.y));
   const maxY = Math.max(...allPoints.map((point) => point.y));
+  const safeMaxX = minX === maxX ? maxX + 1 : maxX;
   const safeMaxY = minY === maxY ? maxY + 1 : maxY;
+  const xTicks = [0, 1, 2, 3].map((index) => minX + ((safeMaxX - minX) / 3) * index);
+  const yTicks = [0, 1, 2, 3].map((index) => minY + ((safeMaxY - minY) / 3) * (3 - index));
+  const activeSeriesLabel = hoveredPoint?.seriesLabel ?? inspectedSeriesLabel;
 
   function pointToCoords(point) {
     const x = padding + ((point.x - minX) / Math.max(1, maxX - minX)) * (width - padding * 2);
     const y = height - padding - ((point.y - minY) / Math.max(1e-9, safeMaxY - minY)) * (height - padding * 2);
-    return `${x},${y}`;
+    return { x, y };
+  }
+
+  function toggleSeriesVisibility(label) {
+    setHiddenSeriesLabels((current) => {
+      const nextHidden = !current[label];
+      const visibleCount = series.filter((item) => !current[item.label]).length;
+      if (nextHidden && visibleCount === 1) {
+        return current;
+      }
+      return {
+        ...current,
+        [label]: nextHidden,
+      };
+    });
   }
 
   return (
@@ -2181,31 +2699,360 @@ function ComparisonChart({ title, subtitle, xLabel, yLabel, metricKey, series })
           {xLabel} {formatCount(minX)} → {formatCount(maxX)} · {yLabel} {formatMetricValue(metricKey, minY)} → {formatMetricValue(metricKey, safeMaxY)}
         </span>
       </div>
-      <svg className="evaluation-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
-        {[0, 1, 2, 3].map((index) => {
-          const y = padding + ((height - padding * 2) / 3) * index;
-          return <line key={index} x1={padding} y1={y} x2={width - padding} y2={y} className="evaluation-chart-grid" />;
-        })}
-        {series.map((item) => (
-          <polyline
-            key={item.label}
-            points={item.points.map(pointToCoords).join(" ")}
-            fill="none"
-            stroke={item.color}
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        ))}
-      </svg>
+      <div className="evaluation-axis-guide">
+        <span>Survole un point pour lire la valeur exacte</span>
+        <span>Clique sur un run dans la legende pour le masquer</span>
+        <span>{visibleSeries.length} / {series.length} series visibles</span>
+      </div>
+      <div className="evaluation-chart-frame">
+        <svg
+          className="evaluation-chart"
+          viewBox={`0 0 ${width} ${height}`}
+          role="img"
+          aria-label={title}
+          onMouseLeave={() => setHoveredPoint(null)}
+        >
+          {[0, 1, 2, 3].map((index) => {
+            const y = padding + ((height - padding * 2) / 3) * index;
+            return <line key={`h-${index}`} x1={padding} y1={y} x2={width - padding} y2={y} className="evaluation-chart-grid" />;
+          })}
+          {[0, 1, 2, 3].map((index) => {
+            const x = padding + ((width - padding * 2) / 3) * index;
+            return <line key={`v-${index}`} x1={x} y1={padding} x2={x} y2={height - padding} className="evaluation-chart-grid" />;
+          })}
+          {hoveredPoint ? (
+            <>
+              <line
+                x1={padding}
+                y1={hoveredPoint.coords.y}
+                x2={width - padding}
+                y2={hoveredPoint.coords.y}
+                className="evaluation-chart-guide-line"
+              />
+              <line
+                x1={hoveredPoint.coords.x}
+                y1={padding}
+                x2={hoveredPoint.coords.x}
+                y2={height - padding}
+                className="evaluation-chart-guide-line"
+              />
+            </>
+          ) : null}
+          {visibleSeries.map((item) => {
+            const isActive = activeSeriesLabel ? activeSeriesLabel === item.label : true;
+            return (
+              <g key={item.label} opacity={isActive ? 1 : 0.22}>
+                <polyline
+                  points={item.points.map((point) => {
+                    const coords = pointToCoords(point);
+                    return `${coords.x},${coords.y}`;
+                  }).join(" ")}
+                  fill="none"
+                  stroke={item.color}
+                  strokeWidth={isActive ? "3.5" : "2.4"}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                {item.points.map((point, pointIndex) => {
+                  const coords = pointToCoords(point);
+                  const isHovered =
+                    hoveredPoint?.seriesLabel === item.label &&
+                    hoveredPoint?.x === point.x &&
+                    hoveredPoint?.y === point.y;
+                  return (
+                    <g
+                      key={`${item.label}-${pointIndex}`}
+                      onMouseEnter={() => setHoveredPoint({ ...point, coords, color: item.color, seriesLabel: item.label })}
+                    >
+                      <circle
+                        cx={coords.x}
+                        cy={coords.y}
+                        r={isHovered ? "5.5" : "4"}
+                        fill={item.color}
+                        className="evaluation-chart-point-node"
+                      />
+                      <circle
+                        cx={coords.x}
+                        cy={coords.y}
+                        r="12"
+                        fill="transparent"
+                        className="evaluation-chart-point-hitbox"
+                      />
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })}
+          <text x={width / 2} y={height - 8} textAnchor="middle" className="evaluation-chart-axis-title">
+            {xLabel}
+          </text>
+          <text
+            x={14}
+            y={height / 2}
+            textAnchor="middle"
+            transform={`rotate(-90 14 ${height / 2})`}
+            className="evaluation-chart-axis-title"
+          >
+            {yLabel}
+          </text>
+          {xTicks.map((tick, index) => {
+            const x = padding + ((tick - minX) / Math.max(1e-9, safeMaxX - minX)) * (width - padding * 2);
+            return (
+              <text key={`x-tick-${index}`} x={x} y={height - 20} textAnchor="middle" className="evaluation-chart-tick">
+                {formatCount(tick)}
+              </text>
+            );
+          })}
+          {yTicks.map((tick, index) => {
+            const y = padding + ((height - padding * 2) / 3) * index + 4;
+            return (
+              <text key={`y-tick-${index}`} x={padding - 10} y={y} textAnchor="end" className="evaluation-chart-tick">
+                {formatMetricValue(metricKey, tick)}
+              </text>
+            );
+          })}
+        </svg>
+        {hoveredPoint ? (
+          <div
+            className="evaluation-chart-tooltip"
+            style={{
+              left: `${(hoveredPoint.coords.x / width) * 100}%`,
+              top: `${(hoveredPoint.coords.y / height) * 100}%`,
+            }}
+          >
+            <strong>{hoveredPoint.seriesLabel}</strong>
+            <span>{xLabel}: {formatCount(hoveredPoint.x)}</span>
+            <span>{yLabel}: {formatMetricValue(metricKey, hoveredPoint.y)}</span>
+          </div>
+        ) : null}
+      </div>
       <div className="evaluation-chart-legend">
         {series.map((item) => (
-          <div key={item.label} className="evaluation-chart-legend-item">
+          <button
+            key={item.label}
+            type="button"
+            className={`evaluation-chart-legend-item ${hiddenSeriesLabels[item.label] ? "evaluation-chart-legend-item-muted" : ""} ${activeSeriesLabel === item.label ? "evaluation-chart-legend-item-active" : ""}`}
+            onClick={() => toggleSeriesVisibility(item.label)}
+            onMouseEnter={() => setInspectedSeriesLabel(item.label)}
+            onMouseLeave={() => setInspectedSeriesLabel(null)}
+          >
             <span className="evaluation-chart-legend-swatch" style={{ backgroundColor: item.color }} />
-            <strong>{item.label}</strong>
-            <small>{formatCount(item.points.length)} points</small>
-          </div>
+            <div>
+              <strong>{item.label}</strong>
+              <small>{formatCount(item.points.length)} points</small>
+            </div>
+          </button>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function normalizeConfusionMatrix(matrix, normalization) {
+  const numericMatrix = matrix.map((row) => row.map((value) => Number(value ?? 0)));
+  if (normalization === "row") {
+    return numericMatrix.map((row) => {
+      const rowSum = row.reduce((sum, value) => sum + value, 0);
+      if (rowSum <= 0) {
+        return row.map(() => 0);
+      }
+      return row.map((value) => value / rowSum);
+    });
+  }
+  if (normalization === "column") {
+    const columnSums = numericMatrix[0].map((_, colIndex) => numericMatrix.reduce((sum, row) => sum + row[colIndex], 0));
+    return numericMatrix.map((row) => row.map((value, colIndex) => {
+      const columnSum = columnSums[colIndex];
+      return columnSum > 0 ? value / columnSum : 0;
+    }));
+  }
+  return numericMatrix;
+}
+
+function formatConfusionValue(value, normalization) {
+  if (normalization === "none") {
+    return formatCount(value);
+  }
+  return formatPercent(value);
+}
+
+function ConfusionMatrixView({ title, mode, normalization, primaryItem, referenceItem, snrBand }) {
+  if (!primaryItem) {
+    return <p className="dashboard-empty">Pas assez de donnees pour afficher {title.toLowerCase()}.</p>;
+  }
+
+  return (
+    <div className="evaluation-render-stack">
+      <div className="evaluation-chart-meta">
+        <div>
+          <strong>{title}</strong>
+          <span>
+            {mode === "difference"
+              ? "Une seule heatmap affiche la difference A - B sur l'epoch du best checkpoint de chaque run."
+              : "Une seule heatmap affiche le run selectionne. Survole une case pour lire la valeur exacte."}
+          </span>
+        </div>
+      </div>
+      <ConfusionMatrixCard
+        key={`${primaryItem.label}-${referenceItem?.label ?? "single"}-${snrBand}-${normalization}`}
+        mode={mode}
+        normalization={normalization}
+        label={primaryItem.label}
+        compareLabel={referenceItem?.label ?? null}
+        epoch={primaryItem.epoch}
+        compareEpoch={referenceItem?.epoch ?? null}
+        matrix={primaryItem.matrices?.[snrBand]}
+        compareMatrix={referenceItem?.matrices?.[snrBand] ?? null}
+        classLabels={primaryItem.classLabels}
+      />
+    </div>
+  );
+}
+
+function ConfusionMatrixCard({ mode, normalization, label, compareLabel, epoch, compareEpoch, matrix, compareMatrix, classLabels }) {
+  const [hoveredCell, setHoveredCell] = useState(null);
+
+  if (!Array.isArray(matrix) || !matrix.length) {
+    return <p className="dashboard-empty">Aucune matrice disponible pour {label}.</p>;
+  }
+  if (mode === "difference" && (!Array.isArray(compareMatrix) || compareMatrix.length !== matrix.length)) {
+    return <p className="dashboard-empty">Impossible de calculer la difference de matrices pour {label}.</p>;
+  }
+
+  const labels = Array.isArray(classLabels) && classLabels.length === matrix.length
+    ? classLabels
+    : matrix.map((_, index) => (index === matrix.length - 1 ? "bg" : `c${index}`));
+
+  const normalizedBaseMatrix = normalizeConfusionMatrix(matrix, normalization);
+  const normalizedCompareMatrix = compareMatrix ? normalizeConfusionMatrix(compareMatrix, normalization) : null;
+  const displayMatrix = mode === "difference"
+    ? normalizedBaseMatrix.map((row, rowIndex) => row.map((value, colIndex) => Number(value ?? 0) - Number(normalizedCompareMatrix?.[rowIndex]?.[colIndex] ?? 0)))
+    : normalizedBaseMatrix;
+
+  const flatValues = displayMatrix.flatMap((row) => row);
+  const maxValue = mode === "difference"
+    ? Math.max(...flatValues.map((value) => Math.abs(value)), 1)
+    : Math.max(...flatValues, 1);
+
+  function cellBackground(value) {
+    const numericValue = Number(value ?? 0);
+    if (mode === "difference") {
+      const ratio = Math.min(1, Math.abs(numericValue) / maxValue);
+      const alpha = 0.08 + ratio * 0.84;
+      if (numericValue > 0) {
+        return `rgba(200, 116, 47, ${alpha})`;
+      }
+      if (numericValue < 0) {
+        return `rgba(63, 86, 107, ${alpha})`;
+      }
+      return "rgba(241, 245, 249, 0.9)";
+    }
+    const ratio = Math.max(0, numericValue / maxValue);
+    const alpha = 0.08 + ratio * 0.84;
+    return `rgba(200, 116, 47, ${alpha})`;
+  }
+
+  return (
+    <section className="evaluation-plot-card">
+      <div className="evaluation-chart-meta">
+        <div>
+          <strong>{mode === "difference" ? `${label} - ${compareLabel}` : label}</strong>
+          <span>
+            {mode === "difference"
+              ? `Epochs ${formatCount(epoch)} - ${formatCount(compareEpoch)} · lignes = verite terrain, colonnes = predictions`
+              : `Epoch ${formatCount(epoch)} · lignes = verite terrain, colonnes = predictions`}
+          </span>
+        </div>
+        <span>{mode === "difference" ? `Amplitude max ${formatConfusionValue(maxValue, normalization)}` : `Max ${formatConfusionValue(maxValue, normalization)}`}</span>
+      </div>
+      <div className="evaluation-axis-guide">
+        <span>{mode === "difference" ? "Orange: A > B" : "Plus c'est fonce, plus le compte est eleve"}</span>
+        {mode === "difference" ? <span>Bleu: A &lt; B</span> : null}
+        <span>
+          {normalization === "row"
+            ? "Chaque ligne somme a 100%"
+            : normalization === "column"
+              ? "Chaque colonne somme a 100%"
+              : "Matrice brute"}
+        </span>
+        <span>{mode === "difference" ? "Valeur affichee = A - B" : normalization === "none" ? "Valeur affichee = nombre d'exemples" : "Valeur affichee = pourcentage"}</span>
+      </div>
+      <div className="evaluation-confusion-frame">
+        <div
+          className="evaluation-confusion-scroll"
+          onMouseLeave={() => setHoveredCell(null)}
+        >
+          <div
+            className="evaluation-confusion-matrix"
+            style={{ gridTemplateColumns: `110px repeat(${displayMatrix.length}, minmax(40px, 1fr))` }}
+          >
+            <div className="evaluation-confusion-corner">GT \ Pred</div>
+            {labels.map((cellLabel) => (
+              <div key={`col-${cellLabel}`} className="evaluation-confusion-axis-cell evaluation-confusion-axis-top" title={cellLabel}>
+                {cellLabel}
+              </div>
+            ))}
+            {displayMatrix.map((row, rowIndex) => (
+              <Fragment key={`row-${labels[rowIndex]}`}>
+                <div className="evaluation-confusion-axis-cell evaluation-confusion-axis-left" title={labels[rowIndex]}>
+                  {labels[rowIndex]}
+                </div>
+                {row.map((value, colIndex) => {
+                  const numericValue = Number(value ?? 0);
+                  const isActive = hoveredCell?.rowIndex === rowIndex && hoveredCell?.colIndex === colIndex;
+                  const baseValue = Number(matrix?.[rowIndex]?.[colIndex] ?? 0);
+                  const referenceValue = Number(compareMatrix?.[rowIndex]?.[colIndex] ?? 0);
+                  const displayedBaseValue = Number(normalizedBaseMatrix?.[rowIndex]?.[colIndex] ?? 0);
+                  const displayedReferenceValue = Number(normalizedCompareMatrix?.[rowIndex]?.[colIndex] ?? 0);
+                  return (
+                    <button
+                      key={`${rowIndex}-${colIndex}`}
+                      type="button"
+                      className={`evaluation-confusion-cell ${isActive ? "evaluation-confusion-cell-active" : ""}`}
+                      style={{ background: cellBackground(numericValue) }}
+                      onMouseEnter={() => setHoveredCell({
+                        rowIndex,
+                        colIndex,
+                        rowLabel: labels[rowIndex],
+                        colLabel: labels[colIndex],
+                        value: numericValue,
+                        baseValue,
+                        referenceValue,
+                        displayedBaseValue,
+                        displayedReferenceValue,
+                      })}
+                    >
+                      {mode === "difference" && numericValue > 0 ? "+" : ""}
+                      {formatConfusionValue(numericValue, normalization)}
+                    </button>
+                  );
+                })}
+              </Fragment>
+            ))}
+          </div>
+        </div>
+        {hoveredCell ? (
+          <div className="evaluation-confusion-tooltip">
+            <strong>{mode === "difference" ? `${label} - ${compareLabel}` : label}</strong>
+            <span>GT: {hoveredCell.rowLabel}</span>
+            <span>Prediction: {hoveredCell.colLabel}</span>
+            {mode === "difference" ? (
+              <>
+                <span>A brut: {formatCount(hoveredCell.baseValue)}</span>
+                <span>B brut: {formatCount(hoveredCell.referenceValue)}</span>
+                <span>A affiche: {formatConfusionValue(hoveredCell.displayedBaseValue, normalization)}</span>
+                <span>B affiche: {formatConfusionValue(hoveredCell.displayedReferenceValue, normalization)}</span>
+                <span>Delta: {hoveredCell.value > 0 ? "+" : ""}{formatConfusionValue(hoveredCell.value, normalization)}</span>
+              </>
+            ) : (
+              <>
+                <span>Brut: {formatCount(hoveredCell.baseValue)}</span>
+                <span>Affiche: {formatConfusionValue(hoveredCell.value, normalization)}</span>
+              </>
+            )}
+          </div>
+        ) : null}
       </div>
     </section>
   );

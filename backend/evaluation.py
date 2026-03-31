@@ -248,3 +248,56 @@ def evaluation_recall_snr(run_path: str, epoch: int) -> Dict[str, Any]:
         "snr_bins": snr_bins,
         "recall": recall,
     }
+
+
+def _extract_confusion_matrix(payload: Dict[str, Any], key: str) -> List[List[float]]:
+    matrix = payload.get(key)
+    if not isinstance(matrix, list) or not matrix:
+        raise HTTPException(status_code=404, detail=f"No '{key}' found in metrics JSON.")
+
+    normalized: List[List[float]] = []
+    expected_width: int | None = None
+    for row in matrix:
+        if not isinstance(row, list) or not row:
+            raise HTTPException(status_code=404, detail=f"Invalid '{key}' matrix format in metrics JSON.")
+        if expected_width is None:
+            expected_width = len(row)
+        if len(row) != expected_width:
+            raise HTTPException(status_code=404, detail=f"Non rectangular '{key}' matrix in metrics JSON.")
+        normalized.append([float(value) for value in row])
+
+    if len(normalized) != expected_width:
+        raise HTTPException(status_code=404, detail=f"Non square '{key}' matrix in metrics JSON.")
+
+    return normalized
+
+
+def _default_confusion_labels(size: int) -> List[str]:
+    if size <= 0:
+        return []
+    if size == 1:
+        return ["bg"]
+    return [f"c{i}" for i in range(size - 1)] + ["bg"]
+
+
+def evaluation_confusion_matrices(run_path: str, epoch: int) -> Dict[str, Any]:
+    run_dir = _resolve_run_dir(run_path)
+    metrics_path = _resolve_metrics_json(run_dir, epoch)
+    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+
+    low_snr = _extract_confusion_matrix(payload, "conf_matrix_low_snr")
+    medium_snr = _extract_confusion_matrix(payload, "conf_matrix_medium_snr")
+    high_snr = _extract_confusion_matrix(payload, "conf_matrix_high_snr")
+    class_labels = _default_confusion_labels(len(low_snr))
+
+    return {
+        "run_path": str(run_dir),
+        "epoch": epoch,
+        "metrics_json_path": str(metrics_path),
+        "class_labels": class_labels,
+        "matrices": {
+            "low_snr": low_snr,
+            "medium_snr": medium_snr,
+            "high_snr": high_snr,
+        },
+    }
