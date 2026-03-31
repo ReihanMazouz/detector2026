@@ -1,10 +1,8 @@
-# Response to Reviewer fxsb
-
 We thank the reviewer for the thorough evaluation and constructive feedback. We address the main concerns below.
 
 ## W1. Lack of real-world evaluation and reproducibility
 
-We now include a cross-domain evaluation on a real acoustic dataset. The corresponding results and qualitative examples are provided here: [acoustic_results_figures.md](./acoustic_results_figures.md).
+We now include a cross-domain evaluation on a real acoustic dataset. The corresponding results and qualitative examples are provided here: [acoustic_results_figures.md](https://github.com/ICMLanonymous2026/MRS_YOLO_ICML26/tree/main/icml_reviewer_responses/acoustic_results_figures.md).
 
 ## W2 and Key Question 1. Evaluation baselines (decision-level ensemble vs Oracle)
 
@@ -47,4 +45,3 @@ The end-to-end comparison depends on the baseline:
 ## W3 and Key Question 4. Originality, conceptual contribution, and societal impact
 
 WWe agree that the societal impact discussion should be strengthened. While the method is motivated as a general approach for time-frequency detection and is relevant to benign applications such as acoustic monitoring and environmental sensing, RF signal detection technologies may also raise dual-use concerns. In particular, such methods could be used in surveillance, intelligence, or electronic-warfare contexts, and may therefore raise privacy, security, or governance issues if deployed without appropriate safeguards and oversight. We will include this discussion directly in the revised paper and clarify that the present work is methodological in nature rather than tied to a specific deployment scenario.
-

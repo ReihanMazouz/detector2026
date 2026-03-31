@@ -1,10 +1,8 @@
-# Response to Reviewer hRjP
-
 We thank the reviewer for the detailed and technically insightful feedback.
 
 ## Q5 -> Q13: About the Oracle
 
-The original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition together with its interpretation as a recall and classification upper bound; the corresponding standalone note is available here: [oracle_icml.pdf](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses_new/oracle_icml.pdf).
+The original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition together with its interpretation as a recall and classification upper bound; the corresponding standalone note is available here: [oracle_icml.pdf](https://github.com/ICMLanonymous2026/MRS_YOLO_ICML26/blob/main/icml_reviewer_responses/oracle_icml.pdf).
 
 ### Q5
 
@@ -26,7 +24,7 @@ Wavelets induce a logarithmic tiling, with finer temporal resolution at high fre
 
 More generally, no time-frequency representation avoids the underlying trade-off; they differ only in how it is distributed [2]. This is why combining several ones is a natural way to capture complementary signal characteristics.
 
-We hence use multiple STFTs. This choice retains a harmonic basis with clear physical meaning in terms of local spectral content, while remaining computationally efficient thanks to FFT-based implementations.
+We hence use multiple STFTs. The STFT provides a uniform tiling of the time-frequency plane, avoiding frequency-dependent bias and making it a flexible representation for detecting diverse and unknown signal structures, while remaining computationally efficient via FFT-based implementations. More generally, our approach is not restricted to STFT: it can be extended to other time-frequency representations if they better match the underlying structure of the signals of interest.
 
 [1] Karlheinz Gröchenig, *Foundations of Time-Frequency Analysis*, Birkhäuser, 2001.
 

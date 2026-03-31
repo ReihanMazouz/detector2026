@@ -1,10 +1,8 @@
-# Response to Reviewer 7cmh
-
 We thank the reviewer for their detailed and thoughtful evaluation. We address the main concerns below.
 
 ## W1. Lack of real-world evaluation
 
-We now include a cross-domain evaluation on a real acoustic dataset. The corresponding results and qualitative examples are provided here: [acoustic_results_figures.md](./acoustic_results_figures.md).
+We now include a cross-domain evaluation on a real acoustic dataset. The corresponding results and qualitative examples are provided here: [acoustic_results_figures.md](https://github.com/ICMLanonymous2026/MRS_YOLO_ICML26/tree/main/icml_reviewer_responses/acoustic_results_figures.md).
 
 ## W2. Questionable necessity of the multi-resolution motivation
 
@@ -18,7 +16,7 @@ As a concise ablation summary, we compared three single-resolution input paramet
 | Amplitude + phase | 0.3127 | 0.3833 | 0.4369 | 0.5551 | 0.6305 | 2.88M | 632.00M |
 | Real + imaginary | 0.3077 | 0.3671 | 0.4308 | 0.5475 | 0.6239 | 2.88M | 632.00M |
 
-This ablation indicates that, in our setting, explicitly providing the complex spectrum does not improve over amplitude alone. A more principled alternative would be to use complex-valued neural networks [1] to process the complex spectrum natively. In some settings, this can be beneficial: for example, a complex-valued version of YOLO for SAR object detection [2] reports improvements of approximately +1.4% mAP50 and +0.5% mAP50:95. However, these gains come at a significant computational cost, with FLOPs roughly doubling due to complex-valued operations. Taken together, these observations support our interpretation that the benefit of multi-resolution STFTs is not to recover information missing from a single complex spectrogram, but to provide a more useful inductive bias for robust detection. The corresponding table and training curves are provided here: [w2_ablation_figures.md](./w2_ablation_figures.md).
+This ablation indicates that, in our setting, explicitly providing the complex spectrum does not improve over amplitude alone. A more principled alternative would be to use complex-valued neural networks [1] to process the complex spectrum natively. In some settings, this can be beneficial: for example, a complex-valued version of YOLO for SAR object detection [2] reports improvements of approximately +1.4% mAP50 and +0.5% mAP50:95. However, these gains come at a significant computational cost, with FLOPs roughly doubling due to complex-valued operations. Taken together, these observations support our interpretation that the benefit of multi-resolution STFTs is not to recover information missing from a single complex spectrogram, but to provide a more useful inductive bias for robust detection. The corresponding table and training curves are provided here: [w2_ablation_figures.md](https://github.com/ICMLanonymous2026/MRS_YOLO_ICML26/tree/main/icml_reviewer_responses/w2_ablation_figures.md).
 
 ## W3. Potential over-engineering
 
@@ -30,7 +28,7 @@ To address this point, the revised version now includes evaluation on an additio
 - Different data generation processes (simulated vs real),
 - Different noise conditions.
 
-We therefore believe that, although the concern about over-engineering is legitimate, the new cross-domain evaluation supports the relevance of the proposed architectural choices beyond the initial experimental setting.
+We therefore believe that, although the concern about over-engineering is legitimate, the new cross-domain evaluation supports the relevance of the proposed architectural choices beyond the initial experimental setting. The corresponding results are provided here: [acoustic_results_figures.md](https://github.com/ICMLanonymous2026/MRS_YOLO_ICML26/tree/main/icml_reviewer_responses/acoustic_results_figures.md).
 
 ## Conclusion
 
