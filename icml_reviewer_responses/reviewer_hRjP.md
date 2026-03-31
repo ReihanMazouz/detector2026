@@ -54,4 +54,4 @@ Ground-truth boxes are generated from the known parameters used to generate the 
 
 ### Q14 and Q15: Nature of the contribution
 
-The contribution is primarily architectural and representational, centered on time-frequency detection. Rather than being application-specific (e.g., RF or acoustic), it is driven by the general problem of detecting structures in time-frequency representations. More generally, the approach can be applied to any setting where multiple complementary representations can be fused within a detection framework.
+The contribution is primarily architectural, centered on time-frequency detection. Rather than being application-specific (e.g., RF or acoustic), it is driven by the general problem of detecting structures in time-frequency representations. More generally, the approach can be applied to any setting where multiple complementary representations can be fused within a detection framework.

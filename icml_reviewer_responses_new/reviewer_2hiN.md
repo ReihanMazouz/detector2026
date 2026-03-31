@@ -2,15 +2,11 @@ We thank the reviewer for their careful reading and constructive feedback.
 
 **Weakness 1.**
 
-We agree that evaluating on public datasets would strengthen the paper.
+We acknowledge that evaluation on real and public datasets would strengthen the empirical validation.
 
-Regarding **CageDroneRF**, we have recently obtained access to the dataset. However, the remaining time before the deadline is too limited to conduct a thorough and reliable evaluation.
+Regarding **CageDroneRF**, we have recently obtained access to the dataset. However, the remaining time before the deadline is too limited to conduct a thorough and reliable evaluation. Concerning **RadDet**, although it is a relevant benchmark, it cannot be directly used in our framework. The dataset provides only PNG spectrograms rather than raw IQ signals, preventing the recomputation of multi-resolution representations required by our method. Additionally, the limited dynamic range of PNG encoding is not well-suited for low-SNR scenarios.
 
-Concerning **RadDet**, although it is a relevant benchmark, it cannot be directly used in our framework. The dataset provides only PNG spectrograms rather than raw IQ signals, preventing the recomputation of multi-resolution representations required by our method. Additionally, the limited dynamic range of PNG encoding is not well-suited for low-SNR scenarios.
-
-To address this limitation more meaningfully, we include in the revised version a **cross-domain evaluation** on real-world acoustic data: *Ocean Networks Canada (ONC) hydrophone dataset*, publicly available and annotated for marine mammal detection [1].
-
-This dataset consists of real signals and provides a meaningful test of generalization beyond simulated RF data. A summary of the detection results is reported below:
+To address this limitation more meaningfully, we will include in the revised version a **cross-domain evaluation** on real-world acoustic data: *Ocean Networks Canada (ONC) hydrophone dataset*, publicly available and annotated for marine mammal detection [1]. This dataset consists of real signals and provides a meaningful test of generalization beyond simulated RF data. A summary of the detection results is reported below:
 
 | Model | Initial R@0.9P | Initial mAP50 | Initial mAP50:95 | Moderate Noise R@0.9P | Moderate Noise mAP50 | Moderate Noise mAP50:95 | Strong Noise R@0.9P | Strong Noise mAP50 | Strong Noise mAP50:95 | Very Strong Noise R@0.9P | Very Strong Noise mAP50 | Very Strong Noise mAP50:95 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -35,12 +31,10 @@ A detailed description of each waveform will be provided in the **appendix**.
 
 **Key Question: Translation invariance and SCSA on spectrograms.**
 
-We agree that spectrograms do not exhibit translation invariance, especially along the frequency axis, unlike natural images. However, the SCSA block does not inherently require such invariance in our setting.
-
-Its use is primarily motivated by ablation results, but it can also be interpreted intuitively in our framework:
+We agree that spectrograms do not exhibit translation invariance, especially along the frequency axis, unlike natural images. However, the SCSA block does not inherently require such invariance in our setting. Its use is primarily motivated by ablation results, but it can also be interpreted intuitively in our framework:
 
 - The goal of SCSA is to improve the **fusion of multi-resolution feature spaces** after concatenation and before filtering.
-- **Channel attention** is a natural choice here because reweighting channels before the subsequent channel filtering stage helps the model emphasize the most useful resolution-dependent features at the right moment in the pipeline.
+- **Channel attention** is a natural choice here because reweighting channels before the subsequent channel filtering stage helps the model emphasize the most useful resolution-dependent features for the filtering stage.
 - **Spatial attention**, applied beforehand, emphasizes relevant time-frequency regions. At this stage, all feature maps are aligned on a common spatial grid: a signal located at $(x,y)$ in one resolution remains localized at the same position across all resolutions. Therefore, applying spatial attention around this location is consistent and meaningful.
 
 In this context, spatial attention acts as a **location-dependent weighting** and do not rely on any assumption of translation invariance.

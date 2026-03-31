@@ -37,7 +37,7 @@ The corresponding visualization will be included in the revised version. It can 
 
 ## Weakness 3
 
-We agree that introducing signal classes only as acronyms reduces clarity. A detailed description of each waveform will be provided in the **appendix**. It can be found here: [waveform_descriptions.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/waveform_descriptions.md).
+A detailed description of each waveform will be provided in the **appendix**. It can be found here: [waveform_descriptions.md](https://github.com/ReihanMazouz/detector2026/blob/main/icml_reviewer_responses/waveform_descriptions.md).
 
 ## Key Question: Translation invariance and SCSA on spectrograms
 
