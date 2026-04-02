@@ -1,0 +1,25 @@
+- Yang, Z., Zhang, Y., Qian, K., and Wu, C. {SLNet}: A spec-
+trogram learning neural network for deep wireless sens-
+ing. In 20th USENIX Symposium on Networked Systems
+Design and Implementation (NSDI 23), pp. 1221–1236,
+2023.
+- Yao, S., Piao, A., Jiang, W., Zhao, Y., Shao, H., Liu, S.,
+Liu, D., Li, J., Wang, T., Hu, S., et al. Stfnets: Learning
+sensing signals from the time-frequency perspective with
+short-time fourier neural networks. In The World Wide
+Web Conference, pp. 2192–2202, 2019.
+- Zha, X., Peng, H., Qin, X., Li, G., and Yang, S. A deep
+learning framework for signal detection and modulation
+classification. Sensors, 19(18):4042, 2019.
+- Zhang, Q., Qian, X., Ni, Z., Nicolson, A., Ambikairajah, E.,
+and Li, H. A time-frequency attention module for neural
+speech enhancement. IEEE/ACM Transactions on Audio,
+Speech, and Language Processing, 31:462–475, 2022.
+- Zhang, Z., Lu, X., Cao, G., Yang, Y., Jiao, L., and Liu, F.
+Vit-yolo: Transformer-based yolo for object detection. In
+Proceedings of the IEEE/CVF international conference
+on computer vision, pp. 2799–2808, 2021.
+- Zhu, X., Wu, H., He, F., Yang, Z., Meng, J., and Ruan, J.
+Yolo-cj: A lightweight network for compound jamming
+signal detection. IEEE Transactions on Aerospace and
+Electronic Systems, 60(5):6807–6821, 2024.

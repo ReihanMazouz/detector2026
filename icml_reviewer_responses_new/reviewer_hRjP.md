@@ -2,13 +2,13 @@ We thank the reviewer for the detailed and technically insightful feedback.
 
 **Q5 -> Q13: About the Oracle**
 
-The original description of the Oracle-OR lacked clarity. In the revised version, we will provide a full algorithmic definition together with its interpretation as a recall and classification upper bound. The corresponding algorithm is available here: [oracle_algorithm.pdf](https://github.com/ICMLanonymous2026/MRS_YOLO_ICML26/blob/main/icml_reviewer_responses/oracle_algorithm.pdf).
+The original description of the Oracle-OR lacked clarity. In the revised version, we will provide an algorithmic definition together with its interpretation as a recall and classification upper bound. The corresponding algorithm is available here: [oracle_algorithm.pdf](https://github.com/ICMLanonymous2026/MRS_YOLO_ICML26/blob/main/icml_reviewer_responses/oracle_algorithm.pdf).
 
 **Q5**
 
 The reviewer correctly states that a fusion model should not outperform a true instance-level oracle unless it extracts additional information beyond what is present in individual models. This is precisely the phenomenon we aim to highlight: the proposed model benefits from observing the same signal at multiple time-frequency resolutions, which improves confidence calibration. This can reduce false alarms, or, at a fixed false alarm rate (FAR), increase detection probability. Moreover, the experiment on Dataset C explicitly demonstrates that the model can leverage inter-resolution correlations to discriminate between waveform patterns that are intentionally indistinguishable at a single resolution.
 
-**Q11 and Q12**
+**Q11-Q12**
 
 As the reviewer notices, the oracle, by construction, exhibits a higher false alarm rate (FAR) than individual models. This increased FAR does not impact recall nor classification accuracy (as measured by confusion matrices without noise class), but it does indeed affect mAP.
 
@@ -18,7 +18,7 @@ As for alternative strategies, please refer to our response to Reviewer **fxsb**
 
 Time-frequency analysis is constrained by the Heisenberg trade-off: time and frequency resolution cannot both be arbitrarily precise [1, 2]. Different transforms correspond to different tilings of the time-frequency plane.
 
-Wavelets induce a logarithmic tiling, with finer temporal resolution at high frequencies and finer frequency resolution at low frequencies [2]. This is well suited to some multi-scale signals, but not universally optimal: it implicitly favors signals whose relevant structures follow that hierarchy. More generally, no time-frequency representation avoids the underlying trade-off, they differ only in how it is distributed [2]. This is why combining several ones is a natural way to capture complementary signal characteristics.
+Wavelets induce a logarithmic tiling, with finer temporal resolution at high frequencies and finer frequency resolution at low frequencies. This is well suited to some multi-scale signals, but not universally optimal: it implicitly favors signals whose relevant structures follow that hierarchy. More generally, no time-frequency representation avoids the underlying trade-off, they differ only in how it is distributed [2]. This is why combining several ones is a natural way to capture complementary signal characteristics.
 
 We hence use multiple STFTs. The STFT provides a uniform tiling of the time-frequency plane, avoiding frequency-dependent bias and making it a flexible representation for detecting diverse and unknown signal structures, while remaining computationally efficient via FFT-based implementations. More generally, our approach is not restricted to STFT: it can be extended to other time-frequency representations if they better match the underlying structure of the signals of interest.
 
