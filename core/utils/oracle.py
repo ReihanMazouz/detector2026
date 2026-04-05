@@ -100,7 +100,6 @@ def oracle_or_post_nms(
     *,
     iou_thresh: float = 0.5,
     false_alarm_iou_thresh: Optional[float] = None,
-    false_alarm_mode: str = "paper",
 ) -> Dict[str, Any]:
     """
     Oracle-OR fusion on already post-NMS single-resolution predictions.
@@ -118,12 +117,6 @@ def oracle_or_post_nms(
         false_alarm_iou_thresh:
             IoU threshold for the redundancy filtering applied to raw false alarms.
             Defaults to ``iou_thresh``.
-        false_alarm_mode:
-            - ``"paper"``: follows the pasted pseudocode exactly. After class
-              filtering, only the retained candidate subset is removed from the raw
-              false alarms.
-            - ``"intersecting"``: raw false alarms are restricted to predictions
-              that do not overlap any GT, which matches the prose description.
 
     Returns:
         Dictionary containing the fused oracle predictions and traceability metadata.
@@ -132,8 +125,6 @@ def oracle_or_post_nms(
             - ``oracle_false_alarms``: retained false alarms after redundancy filtering
             - ``selected_predictions``: one best candidate per covered GT
     """
-    if false_alarm_mode not in {"paper", "intersecting"}:
-        raise ValueError("false_alarm_mode must be either 'paper' or 'intersecting'.")
     if gt_boxes.ndim != 2 or gt_boxes.shape[1] != 4:
         raise ValueError("gt_boxes must be a tensor shaped [N_gt, 4] in xyxy format.")
     if gt_labels.ndim != 1:
@@ -215,8 +206,8 @@ def oracle_or_post_nms(
             }
         )
 
-    matched_reference = matched_indices if false_alarm_mode == "paper" else intersecting_indices
-    raw_false_alarm_indices = [idx for idx in range(len(all_predictions)) if idx not in matched_reference]
+    # False alarms are only predictions that do not intersect any ground truth.
+    raw_false_alarm_indices = [idx for idx in range(len(all_predictions)) if idx not in intersecting_indices]
     oracle_false_alarm_indices = _suppress_redundant_false_alarms(
         all_predictions,
         raw_false_alarm_indices,
@@ -251,7 +242,6 @@ def oracle_or_post_nms(
         "oracle_predictions": _gather_rows(all_predictions, oracle_indices),
         "oracle_sources": _subset_sources(oracle_indices),
         "per_gt_selection": per_gt_selection,
-        "false_alarm_mode": false_alarm_mode,
         "iou_thresh": float(iou_thresh),
         "false_alarm_iou_thresh": float(false_alarm_iou_thresh),
     }

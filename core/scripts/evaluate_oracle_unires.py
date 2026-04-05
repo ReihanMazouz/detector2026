@@ -47,7 +47,13 @@ POSTPROCESS_IOU = 0.1
 SAME_BOX_IOU = 0.9
 ORACLE_IOU = 0.5
 FALSE_ALARM_TARGET = 0.01
-FALSE_ALARM_MODE = "paper"
+
+# Deux options:
+# - "keep_model_thresholds": on garde l'oracle tel qu'il sort des modeles
+#   individuels deja regles a 1% de fausse alarme.
+# - "oracle_1pct_fa": on re-seuille ensuite l'oracle lui-meme pour viser 1% de
+#   fausse alarme.
+FINAL_CONF_MODE = "keep_model_thresholds"
 
 OUTPUT_DIR = Path("/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/oracle_eval_simple")
 
@@ -314,18 +320,28 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
             conf_thresh = float(thr)
             break
 
+    if FINAL_CONF_MODE == "keep_model_thresholds":
+        applied_conf_thresh = 0.0
+    elif FINAL_CONF_MODE == "oracle_1pct_fa":
+        applied_conf_thresh = conf_thresh
+    else:
+        raise ValueError(
+            f"FINAL_CONF_MODE='{FINAL_CONF_MODE}' invalide. "
+            "Choisis 'keep_model_thresholds' ou 'oracle_1pct_fa'."
+        )
+
     recall_snr = recall_per_snr_bin(
         stats,
         snr_bins=range(-20, 20),
         to_plot=False,
         with_classes=True,
         class_index_to_name=CLASS_INDEX_TO_NAME,
-        conf_thresh=conf_thresh,
+        conf_thresh=applied_conf_thresh,
     )
 
     recall_size = recall_per_size_bin(
         stats,
-        conf_thresh=conf_thresh,
+        conf_thresh=applied_conf_thresh,
         with_classes=True,
         class_index_to_name=CLASS_INDEX_TO_NAME,
         snr_min=10,
@@ -334,7 +350,7 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
     recall_max_psnr = recall_per_max_psnr_bin(
         stats,
         psnr_bins=list(range(0, 31)),
-        conf_thresh=conf_thresh,
+        conf_thresh=applied_conf_thresh,
         with_classes=True,
         class_index_to_name=CLASS_INDEX_TO_NAME,
     )
@@ -344,7 +360,7 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         iou_thresholds=np.linspace(0, 1, 21),
         to_plot=False,
         class_index_to_name=CLASS_INDEX_TO_NAME,
-        conf_thresh=conf_thresh,
+        conf_thresh=applied_conf_thresh,
         with_classes=True,
     )
 
@@ -354,7 +370,7 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         snr_max=20,
         class_index_to_name=CLASS_INDEX_TO_NAME,
         to_plot=False,
-        conf_thresh=conf_thresh,
+        conf_thresh=applied_conf_thresh,
         normalize="row",
     )
     conf_matrix_medium = confusion_matrix_snr(
@@ -363,7 +379,7 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         snr_max=10,
         class_index_to_name=CLASS_INDEX_TO_NAME,
         to_plot=False,
-        conf_thresh=conf_thresh,
+        conf_thresh=applied_conf_thresh,
         normalize="row",
     )
     conf_matrix_low = confusion_matrix_snr(
@@ -372,7 +388,7 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         snr_max=0,
         class_index_to_name=CLASS_INDEX_TO_NAME,
         to_plot=False,
-        conf_thresh=conf_thresh,
+        conf_thresh=applied_conf_thresh,
         normalize="row",
     )
 
@@ -382,7 +398,9 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         "avg_recall_low_snr": _avg_recall_between(recall_snr["global"]["snr_bins"], recall_snr["global"]["recall"], -10.0, 19.0),
         "avg_recall_medium_snr": _avg_recall_between(recall_snr["global"]["snr_bins"], recall_snr["global"]["recall"], 0.0, 19.0),
         "avg_recall_high_snr": _avg_recall_between(recall_snr["global"]["snr_bins"], recall_snr["global"]["recall"], 10.0, 19.0),
-        "selected_conf_thresh": conf_thresh,
+        "final_conf_mode": FINAL_CONF_MODE,
+        "oracle_1pct_conf_thresh": conf_thresh,
+        "applied_conf_thresh": applied_conf_thresh,
     }
 
     return {
@@ -457,7 +475,6 @@ def main() -> None:
             gt_labels=gt_labels,
             iou_thresh=ORACLE_IOU,
             false_alarm_iou_thresh=ORACLE_IOU,
-            false_alarm_mode=FALSE_ALARM_MODE,
         )
 
         oracle_predictions = oracle_output["oracle_predictions"]
