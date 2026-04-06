@@ -40,7 +40,7 @@ DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 NUM_CLASSES = 20
 WIDTH_MULT = 0.25  # YOLOv11n
 REG_MAX = 16
-PREPROCESSING = "spectrogram_psnr"
+PREPROCESSING = "none"
 BATCH_SIZE = 16
 
 BASE_POSTPROCESS_CONF = 0.05
