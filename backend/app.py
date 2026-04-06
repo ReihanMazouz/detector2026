@@ -14,8 +14,15 @@ from .datasets import (
     sample_preview_payload,
     training_dataset_info,
 )
-from .evaluation import evaluation_confusion_matrices, evaluation_recall_snr, evaluation_run_details, list_evaluation_runs
+from .evaluation import (
+    evaluation_confusion_matrices,
+    evaluation_f1_stats,
+    evaluation_recall_snr,
+    evaluation_run_details,
+    list_evaluation_runs,
+)
 from .inference import artifacts_preview_payload
+from .path_picker import NativePathPickerError, open_native_path_picker
 from .training import (
     cancel_training_run,
     list_training_runs,
@@ -120,6 +127,25 @@ def system_status() -> Dict[str, Any]:
     return system_status_payload()
 
 
+@app.post("/system/path-picker")
+async def system_path_picker(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON.")
+
+    try:
+        selected_path = open_native_path_picker(
+            kind=str(payload.get("kind", "directory")),
+            title=str(payload.get("title", "Choisir un chemin")),
+            initial_path=str(payload.get("path", "")),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except NativePathPickerError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"path": selected_path or "", "cancelled": selected_path is None}
+
+
 @app.get("/evaluation/runs")
 def evaluation_runs() -> Dict[str, Any]:
     return list_evaluation_runs()
@@ -133,6 +159,11 @@ def evaluation_run(path: str) -> Dict[str, Any]:
 @app.get("/evaluation/run/recall-snr")
 def evaluation_run_recall_snr(path: str, epoch: int) -> Dict[str, Any]:
     return evaluation_recall_snr(path, epoch=epoch)
+
+
+@app.get("/evaluation/run/f1-stats")
+def evaluation_run_f1_stats(path: str, epoch: int) -> Dict[str, Any]:
+    return evaluation_f1_stats(path, epoch=epoch)
 
 
 @app.get("/evaluation/run/confusion-matrices")

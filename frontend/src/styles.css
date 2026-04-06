@@ -1640,6 +1640,55 @@ pre {
   cursor: default;
 }
 
+.path-field-shell {
+  display: grid;
+  gap: 10px;
+}
+
+.path-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.path-field-row input {
+  min-width: 0;
+}
+
+.path-field-browse-button {
+  min-height: 48px;
+  padding-inline: 16px;
+  white-space: nowrap;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(245, 248, 252, 0.96));
+  border: 1px solid rgba(68, 94, 129, 0.14);
+  box-shadow: 0 8px 18px rgba(68, 94, 129, 0.08);
+  transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.path-field-browse-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, rgba(255, 249, 244, 0.96), rgba(255, 241, 230, 0.92));
+  border-color: rgba(200, 116, 47, 0.24);
+  box-shadow: 0 12px 24px rgba(200, 116, 47, 0.12);
+  color: rgba(140, 78, 25, 0.96);
+}
+
+.path-field-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.path-field-meta small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.path-field-error {
+  color: #b74a32;
+}
+
 .dataset-health-indicator {
   display: inline-flex;
   align-items: center;
@@ -2112,6 +2161,14 @@ pre {
 
   .training-live-run-grid {
     grid-template-columns: 1fr;
+  }
+
+  .path-field-row {
+    grid-template-columns: 1fr;
+  }
+
+  .path-field-browse-button {
+    width: 100%;
   }
 
   .training-live-bar-label {

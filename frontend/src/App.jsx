@@ -84,6 +84,7 @@ const EVALUATION_VIEWS = [
   { id: "map_vs_model_cost", label: "mAP vs FLOPs / Params" },
   { id: "confusion_matrices", label: "Confusion matrices" },
   { id: "best_recall_vs_snr", label: "Best recall vs snr" },
+  { id: "f1_threshold_curves", label: "F1 / Precision / Recall" },
   { id: "map_vs_epochs", label: "Map vs epochs" },
   { id: "loss_vs_epochs", label: "Loss vs epochs" },
   { id: "recall_vs_epochs", label: "Recall vs epochs" },
@@ -114,6 +115,11 @@ const EVALUATION_CONFUSION_NORMALIZATION_OPTIONS = [
   { id: "none", label: "Aucune" },
   { id: "row", label: "Par ligne" },
   { id: "column", label: "Par colonne" },
+];
+
+const EVALUATION_CURVE_SCOPE_OPTIONS = [
+  { id: "global", label: "Global" },
+  { id: "per_class", label: "Par classe" },
 ];
 
 function normalizeApiBase(value) {
@@ -151,6 +157,86 @@ function extractApiError(data, fallbackStatus) {
     raw: JSON.stringify(data ?? {}, null, 2),
     diagnostics: null,
   };
+}
+
+function PathField({
+  label,
+  value,
+  onChange,
+  apiFetch,
+  pickerKind = "directory",
+  pickerTitle = "Choisir un chemin",
+  placeholder = "",
+  note,
+  className = "",
+}) {
+  const [pickerState, setPickerState] = useState({ status: "idle", error: "" });
+  const helperText =
+    note ??
+    (pickerKind === "file"
+      ? "Saisie libre ou selection native du fichier."
+      : "Saisie libre ou selection native du dossier.");
+  const isOpeningPicker = pickerState.status === "loading";
+
+  async function handleBrowse() {
+    if (!apiFetch || isOpeningPicker) {
+      return;
+    }
+
+    setPickerState({ status: "loading", error: "" });
+    try {
+      const response = await apiFetch("/system/path-picker", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: pickerKind,
+          path: value,
+          title: pickerTitle,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(extractApiError(data, response.status).message);
+      }
+      if (!data?.cancelled && typeof data?.path === "string" && data.path.trim()) {
+        onChange(data.path);
+      }
+      setPickerState({ status: "idle", error: "" });
+    } catch (error) {
+      setPickerState({
+        status: "error",
+        error: error instanceof Error ? error.message : "Impossible d'ouvrir le selecteur natif.",
+      });
+    }
+  }
+
+  return (
+    <label className={`field ${className}`.trim()}>
+      <span>{label}</span>
+      <div className="path-field-shell">
+        <div className="path-field-row">
+          <input
+            type="text"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={placeholder}
+          />
+          <button
+            type="button"
+            className="ghost-button path-field-browse-button"
+            onClick={() => void handleBrowse()}
+            disabled={isOpeningPicker}
+          >
+            {isOpeningPicker ? "Ouverture..." : "Parcourir"}
+          </button>
+        </div>
+        <div className="path-field-meta">
+          <small>{helperText}</small>
+          {pickerState.error ? <small className="path-field-error">{pickerState.error}</small> : null}
+        </div>
+      </div>
+    </label>
+  );
 }
 
 function Navigation({ page, onNavigate, isConnected, connectionLabel, onDisconnect }) {
@@ -455,6 +541,35 @@ function formatPercent(value) {
   return `${formatDecimal((value ?? 0) * 100, 1)}%`;
 }
 
+function formatThreshold(value) {
+  return formatDecimal(value, 3);
+}
+
+function defaultClassLabel(classKey) {
+  const numericClassId = Number(classKey);
+  if (Number.isInteger(numericClassId)) {
+    return `Class ${numericClassId}`;
+  }
+  return String(classKey ?? "");
+}
+
+function collectCurveClassOptions(curves) {
+  const optionMap = new Map();
+  (curves ?? []).forEach((curve) => {
+    (curve.classOptions ?? []).forEach((option) => {
+      if (!option?.key || optionMap.has(option.key)) {
+        return;
+      }
+      optionMap.set(option.key, option.label || defaultClassLabel(option.key));
+    });
+  });
+  return Array.from(optionMap.entries()).map(([key, label]) => ({ key, label }));
+}
+
+function resolveCurveClassLabel(classOptions, classKey) {
+  return classOptions.find((option) => option.key === classKey)?.label ?? defaultClassLabel(classKey);
+}
+
 function toXYXY(box) {
   return {
     x1: box.xc - box.w / 2,
@@ -744,15 +859,15 @@ function DatasetsPage({ apiFetch }) {
         </div>
 
         <aside className="hero-panel dataset-hero-panel">
-          <label className="field">
-            <span>Dossier du dataset</span>
-            <input
-              type="text"
-              value={datasetPath}
-              onChange={(event) => setDatasetPath(event.target.value)}
-              placeholder="/abs/path/to/dataset"
-            />
-          </label>
+          <PathField
+            label="Dossier du dataset"
+            value={datasetPath}
+            onChange={setDatasetPath}
+            apiFetch={apiFetch}
+            pickerKind="directory"
+            pickerTitle="Choisir un dossier de dataset"
+            placeholder="/abs/path/to/dataset"
+          />
           <div className="dataset-path-note">
             Le chemin peut etre absolu ou relatif a la racine du projet.
           </div>
@@ -1392,20 +1507,33 @@ function TrainingPage({ apiFetch }) {
               <input value={formState.runName} onChange={(event) => setFormState((current) => ({ ...current, runName: event.target.value }))} />
             </label>
 
-            <label className="field field-full-span">
-              <span className="field-label-row">
-                <span>Dataset</span>
-                <span className="dataset-health-indicator" title={datasetIndicatorTitle} aria-label={datasetIndicatorTitle}>
-                  <span className={`dataset-health-dot ${datasetIndicatorClass}`} />
+            <PathField
+              className="field-full-span"
+              label={(
+                <span className="field-label-row">
+                  <span>Dataset</span>
+                  <span className="dataset-health-indicator" title={datasetIndicatorTitle} aria-label={datasetIndicatorTitle}>
+                    <span className={`dataset-health-dot ${datasetIndicatorClass}`} />
+                  </span>
                 </span>
-              </span>
-              <input value={formState.datasetPath} onChange={(event) => setFormState((current) => ({ ...current, datasetPath: event.target.value }))} />
-            </label>
+              )}
+              value={formState.datasetPath}
+              onChange={(nextValue) => setFormState((current) => ({ ...current, datasetPath: nextValue }))}
+              apiFetch={apiFetch}
+              pickerKind="directory"
+              pickerTitle="Choisir un dataset pour l'entrainement"
+              note="Saisie libre ou selection native du dataset d'entrainement."
+            />
 
-            <label className="field field-full-span">
-              <span>Dossier de sortie</span>
-              <input value={formState.outputRoot} onChange={(event) => setFormState((current) => ({ ...current, outputRoot: event.target.value }))} />
-            </label>
+            <PathField
+              className="field-full-span"
+              label="Dossier de sortie"
+              value={formState.outputRoot}
+              onChange={(nextValue) => setFormState((current) => ({ ...current, outputRoot: nextValue }))}
+              apiFetch={apiFetch}
+              pickerKind="directory"
+              pickerTitle="Choisir un dossier de sortie"
+            />
 
             <label className="field">
               <span>Mode dataset</span>
@@ -1677,6 +1805,9 @@ function EvaluationPage({ apiFetch }) {
     map50: false,
   });
   const [recallSNRState, setRecallSNRState] = useState({ status: "idle", curves: [], error: null });
+  const [f1StatsState, setF1StatsState] = useState({ status: "idle", curves: [], error: null });
+  const [evaluationCurveScope, setEvaluationCurveScope] = useState("global");
+  const [evaluationClassKey, setEvaluationClassKey] = useState("");
   const [confusionSnrBand, setConfusionSnrBand] = useState("low_snr");
   const [confusionMode, setConfusionMode] = useState("single");
   const [confusionNormalization, setConfusionNormalization] = useState("none");
@@ -1688,6 +1819,11 @@ function EvaluationPage({ apiFetch }) {
   const selectedScatterMetricKeys = EVALUATION_SCATTER_METRIC_OPTIONS
     .filter((item) => scatterMetricSelection[item.id])
     .map((item) => item.id);
+  const currentCurveClassOptions = visualizationId === "best_recall_vs_snr"
+    ? collectCurveClassOptions(recallSNRState.curves)
+    : visualizationId === "f1_threshold_curves"
+      ? collectCurveClassOptions(f1StatsState.curves)
+      : [];
 
   async function loadRunsFromInputs() {
     const entries = runInputs
@@ -1759,8 +1895,9 @@ function EvaluationPage({ apiFetch }) {
             return {
               label: run.label,
               epoch,
-              snr_bins: data.snr_bins ?? [],
-              recall: data.recall ?? [],
+              global: data.global ?? null,
+              perClass: data.per_class ?? {},
+              classOptions: data.class_options ?? [],
             };
           })
         );
@@ -1774,6 +1911,63 @@ function EvaluationPage({ apiFetch }) {
       }
     })();
   }, [apiFetch, loadedRunsState.runs, visualizationId]);
+
+  useEffect(() => {
+    if (visualizationId !== "f1_threshold_curves" || !loadedRunsState.runs.length) {
+      setF1StatsState({ status: "idle", curves: [], error: null });
+      return;
+    }
+
+    void (async () => {
+      setF1StatsState({ status: "loading", curves: [], error: null });
+      try {
+        const curves = await Promise.all(
+          loadedRunsState.runs.map(async (run) => {
+            const epoch = run.detail?.summary?.best_snapshots?.checkpoint?.epoch;
+            if (!epoch) {
+              throw new Error(`Aucun epoch de best checkpoint disponible pour ${run.label}.`);
+            }
+            const response = await apiFetch(
+              `/evaluation/run/f1-stats?path=${encodeURIComponent(run.path)}&epoch=${encodeURIComponent(epoch)}`
+            );
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(`${run.label}: ${extractApiError(data, response.status).message}`);
+            }
+            return {
+              label: run.label,
+              epoch,
+              global: data.global ?? null,
+              perClass: data.per_class ?? {},
+              classOptions: data.class_options ?? [],
+            };
+          })
+        );
+        setF1StatsState({ status: "ready", curves, error: null });
+      } catch (error) {
+        setF1StatsState({
+          status: "error",
+          curves: [],
+          error: error instanceof Error ? error.message : "Erreur inconnue."
+        });
+      }
+    })();
+  }, [apiFetch, loadedRunsState.runs, visualizationId]);
+
+  useEffect(() => {
+    if (evaluationCurveScope !== "per_class") {
+      return;
+    }
+    if (!currentCurveClassOptions.length) {
+      setEvaluationClassKey("");
+      return;
+    }
+    setEvaluationClassKey((current) => (
+      currentCurveClassOptions.some((option) => option.key === current)
+        ? current
+        : currentCurveClassOptions[0].key
+    ));
+  }, [evaluationCurveScope, visualizationId, recallSNRState.curves, f1StatsState.curves]);
 
   useEffect(() => {
     const matrices = confusionMatrixState.matrices ?? [];
@@ -1910,14 +2104,16 @@ function EvaluationPage({ apiFetch }) {
           <div className="evaluation-manual-list">
             {runInputs.map((item, index) => (
               <div key={`run-input-${index}`} className="evaluation-manual-card">
-                <label className="field field-full-span">
-                  <span>Chemin du run</span>
-                  <input
-                    value={item.path}
-                    onChange={(event) => updateRunInput(index, "path", event.target.value)}
-                    placeholder="/Users/.../runs/examples_of_training/tf_attn_yolon_specificres"
-                  />
-                </label>
+                <PathField
+                  className="field-full-span"
+                  label="Chemin du run"
+                  value={item.path}
+                  onChange={(nextValue) => updateRunInput(index, "path", nextValue)}
+                  apiFetch={apiFetch}
+                  pickerKind="directory"
+                  pickerTitle="Choisir un dossier de run"
+                  placeholder="/Users/.../runs/examples_of_training/tf_attn_yolon_specificres"
+                />
                 <label className="field">
                   <span>Label du plot</span>
                   <input
@@ -2110,6 +2306,49 @@ function EvaluationPage({ apiFetch }) {
               </div>
             </div>
           ) : null}
+          {visualizationId === "best_recall_vs_snr" || visualizationId === "f1_threshold_curves" ? (
+            <div className="evaluation-visual-options">
+              <div className="evaluation-control-group">
+                <strong>Portee des courbes</strong>
+                <p>Affiche soit la courbe globale, soit la courbe d&apos;une classe particuliere.</p>
+                <div className="evaluation-chip-row">
+                  {EVALUATION_CURVE_SCOPE_OPTIONS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`evaluation-chip ${evaluationCurveScope === option.id ? "evaluation-chip-active" : ""}`}
+                      onClick={() => setEvaluationCurveScope(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {evaluationCurveScope === "per_class" ? (
+                <div className="evaluation-control-group">
+                  <strong>Classe observee</strong>
+                  <p>Ce parametre est partage par les vues qui exposent une declinaison par classe.</p>
+                  <label className="field">
+                    <span>Classe</span>
+                    <select
+                      value={evaluationClassKey}
+                      onChange={(event) => setEvaluationClassKey(event.target.value)}
+                      disabled={!currentCurveClassOptions.length}
+                    >
+                      {!currentCurveClassOptions.length ? (
+                        <option value="">Aucune classe disponible</option>
+                      ) : null}
+                      {currentCurveClassOptions.map((option) => (
+                        <option key={option.key} value={option.key}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </section>
 
         <section className="panel panel-span-12">
@@ -2127,6 +2366,10 @@ function EvaluationPage({ apiFetch }) {
               scatterXAxis={scatterXAxis}
               selectedScatterMetricKeys={selectedScatterMetricKeys}
               recallSNRState={recallSNRState}
+              f1StatsState={f1StatsState}
+              evaluationCurveScope={evaluationCurveScope}
+              evaluationClassKey={evaluationClassKey}
+              evaluationClassOptions={currentCurveClassOptions}
               confusionSnrBand={confusionSnrBand}
               confusionMode={confusionMode}
               confusionNormalization={confusionNormalization}
@@ -2159,6 +2402,10 @@ function EvaluationRender({
   scatterXAxis,
   selectedScatterMetricKeys,
   recallSNRState,
+  f1StatsState,
+  evaluationCurveScope,
+  evaluationClassKey,
+  evaluationClassOptions,
   confusionSnrBand,
   confusionMode,
   confusionNormalization,
@@ -2277,24 +2524,153 @@ function EvaluationRender({
       return <p className="dashboard-empty">{recallSNRState.error}</p>;
     }
 
-    const series = (recallSNRState.curves ?? []).map((curve, index) => ({
-      label: `${curve.label} · epoch ${curve.epoch}`,
-      color: ["#c8742f", "#3f566b", "#8b4c18", "#5e7e95"][index % 4],
-      points: (curve.recall ?? []).map((value, pointIndex) => ({
-        x: Number(curve.snr_bins?.[pointIndex] ?? pointIndex),
-        y: Number(value),
-      })),
-    }));
+    const selectedClassLabel = resolveCurveClassLabel(evaluationClassOptions, evaluationClassKey);
+    const series = (recallSNRState.curves ?? []).flatMap((curve, index) => {
+      const selectedCurve = evaluationCurveScope === "per_class"
+        ? curve.perClass?.[evaluationClassKey]
+        : curve.global;
+      if (!selectedCurve) {
+        return [];
+      }
+      return [{
+        label: `${curve.label} · epoch ${curve.epoch}`,
+        color: ["#c8742f", "#3f566b", "#8b4c18", "#5e7e95"][index % 4],
+        points: (selectedCurve.recall ?? []).map((value, pointIndex) => ({
+          x: Number(selectedCurve.snr_bins?.[pointIndex] ?? pointIndex),
+          y: Number(value),
+        })),
+      }];
+    });
+
+    if (!series.length && evaluationCurveScope === "per_class") {
+      return <p className="dashboard-empty">Aucune courbe recall vs snr disponible pour {selectedClassLabel}.</p>;
+    }
 
     return (
       <div className="evaluation-render-stack">
         <ComparisonChart
-          title="Best recall vs snr"
-          subtitle="Courbe globale recall_snr pour le meilleur epoch de recall faible SNR."
+          title={evaluationCurveScope === "per_class" ? `Recall vs snr · ${selectedClassLabel}` : "Best recall vs snr"}
+          subtitle={
+            evaluationCurveScope === "per_class"
+              ? "Courbe recall_snr par classe pour le meilleur epoch de recall faible SNR."
+              : "Courbe globale recall_snr pour le meilleur epoch de recall faible SNR."
+          }
           xLabel="SNR"
           yLabel="Recall"
           metricKey="avg_recall_low_snr"
           series={series}
+        />
+      </div>
+    );
+  }
+
+  if (visualizationId === "f1_threshold_curves") {
+    if (f1StatsState.status === "loading") {
+      return <p className="dashboard-empty">Chargement des courbes f1_stats...</p>;
+    }
+    if (f1StatsState.error) {
+      return <p className="dashboard-empty">{f1StatsState.error}</p>;
+    }
+
+    const selectedClassLabel = resolveCurveClassLabel(evaluationClassOptions, evaluationClassKey);
+    const selectedCurves = (f1StatsState.curves ?? []).flatMap((curve, index) => {
+      const selectedStats = evaluationCurveScope === "per_class"
+        ? curve.perClass?.[evaluationClassKey]
+        : curve.global;
+      if (!selectedStats) {
+        return [];
+      }
+      return [{
+        label: `${curve.label} · epoch ${curve.epoch}`,
+        color: ["#c8742f", "#3f566b", "#8b4c18", "#5e7e95"][index % 4],
+        stats: selectedStats,
+      }];
+    });
+
+    if (!selectedCurves.length) {
+      return (
+        <p className="dashboard-empty">
+          {evaluationCurveScope === "per_class"
+            ? `Aucune courbe f1_stats disponible pour ${selectedClassLabel}.`
+            : "Pas assez de donnees pour afficher f1_stats."}
+        </p>
+      );
+    }
+
+    const thresholdRecallSeries = selectedCurves.map((item) => ({
+      label: item.label,
+      color: item.color,
+      points: (item.stats.thr ?? []).map((threshold, pointIndex) => ({
+        x: Number(threshold),
+        y: Number(item.stats.recall?.[pointIndex] ?? 0),
+      })),
+    }));
+    const thresholdPrecisionSeries = selectedCurves.map((item) => ({
+      label: item.label,
+      color: item.color,
+      points: (item.stats.thr ?? []).map((threshold, pointIndex) => ({
+        x: Number(threshold),
+        y: Number(item.stats.precision?.[pointIndex] ?? 0),
+      })),
+    }));
+    const thresholdF1Series = selectedCurves.map((item) => ({
+      label: item.label,
+      color: item.color,
+      points: (item.stats.thr ?? []).map((threshold, pointIndex) => ({
+        x: Number(threshold),
+        y: Number(item.stats.f1?.[pointIndex] ?? 0),
+      })),
+    }));
+    const precisionRecallSeries = selectedCurves.map((item) => ({
+      label: item.label,
+      color: item.color,
+      points: (item.stats.recall ?? []).map((recallValue, pointIndex) => ({
+        x: Number(recallValue),
+        y: Number(item.stats.precision?.[pointIndex] ?? 0),
+      })),
+    }));
+
+    return (
+      <div className="evaluation-render-stack evaluation-plot-grid">
+        <ComparisonChart
+          title={evaluationCurveScope === "per_class" ? `Recall vs threshold · ${selectedClassLabel}` : "Recall vs threshold"}
+          subtitle="Courbe recall issue de f1_stats."
+          xLabel="Confidence threshold"
+          yLabel="Recall"
+          metricKey="avg_recall_low_snr"
+          series={thresholdRecallSeries}
+          formatXValue={formatThreshold}
+          formatYValue={formatPercent}
+        />
+        <ComparisonChart
+          title={evaluationCurveScope === "per_class" ? `Precision vs threshold · ${selectedClassLabel}` : "Precision vs threshold"}
+          subtitle="Courbe precision issue de f1_stats."
+          xLabel="Confidence threshold"
+          yLabel="Precision"
+          metricKey="precision"
+          series={thresholdPrecisionSeries}
+          formatXValue={formatThreshold}
+          formatYValue={formatPercent}
+        />
+        <ComparisonChart
+          title={evaluationCurveScope === "per_class" ? `F1 vs threshold · ${selectedClassLabel}` : "F1 vs threshold"}
+          subtitle="Courbe F1 issue de f1_stats."
+          xLabel="Confidence threshold"
+          yLabel="F1"
+          metricKey="f1"
+          series={thresholdF1Series}
+          formatXValue={formatThreshold}
+          formatYValue={formatPercent}
+        />
+        <ComparisonChart
+          title={evaluationCurveScope === "per_class" ? `Precision vs recall · ${selectedClassLabel}` : "Precision vs recall"}
+          subtitle="Trace precision / recall reconstituee a partir de f1_stats."
+          xLabel="Recall"
+          yLabel="Precision"
+          metricKey="precision"
+          series={precisionRecallSeries}
+          formatXValue={formatPercent}
+          formatYValue={formatPercent}
         />
       </div>
     );
@@ -2633,7 +3009,16 @@ function buildEpochSeries(loadedRuns, metricKey) {
     .filter((item) => item.points.length >= 2);
 }
 
-function ComparisonChart({ title, subtitle, xLabel, yLabel, metricKey, series }) {
+function ComparisonChart({
+  title,
+  subtitle,
+  xLabel,
+  yLabel,
+  metricKey,
+  series,
+  formatXValue = formatCount,
+  formatYValue = (value) => formatMetricValue(metricKey, value),
+}) {
   const [hiddenSeriesLabels, setHiddenSeriesLabels] = useState({});
   const [hoveredPoint, setHoveredPoint] = useState(null);
   const [inspectedSeriesLabel, setInspectedSeriesLabel] = useState(null);
@@ -2669,7 +3054,7 @@ function ComparisonChart({ title, subtitle, xLabel, yLabel, metricKey, series })
   const activeSeriesLabel = hoveredPoint?.seriesLabel ?? inspectedSeriesLabel;
 
   function pointToCoords(point) {
-    const x = padding + ((point.x - minX) / Math.max(1, maxX - minX)) * (width - padding * 2);
+    const x = padding + ((point.x - minX) / Math.max(1e-9, safeMaxX - minX)) * (width - padding * 2);
     const y = height - padding - ((point.y - minY) / Math.max(1e-9, safeMaxY - minY)) * (height - padding * 2);
     return { x, y };
   }
@@ -2696,7 +3081,7 @@ function ComparisonChart({ title, subtitle, xLabel, yLabel, metricKey, series })
           <span>{subtitle}</span>
         </div>
         <span>
-          {xLabel} {formatCount(minX)} → {formatCount(maxX)} · {yLabel} {formatMetricValue(metricKey, minY)} → {formatMetricValue(metricKey, safeMaxY)}
+          {xLabel} {formatXValue(minX)} → {formatXValue(safeMaxX)} · {yLabel} {formatYValue(minY)} → {formatYValue(safeMaxY)}
         </span>
       </div>
       <div className="evaluation-axis-guide">
@@ -2800,7 +3185,7 @@ function ComparisonChart({ title, subtitle, xLabel, yLabel, metricKey, series })
             const x = padding + ((tick - minX) / Math.max(1e-9, safeMaxX - minX)) * (width - padding * 2);
             return (
               <text key={`x-tick-${index}`} x={x} y={height - 20} textAnchor="middle" className="evaluation-chart-tick">
-                {formatCount(tick)}
+                {formatXValue(tick)}
               </text>
             );
           })}
@@ -2808,7 +3193,7 @@ function ComparisonChart({ title, subtitle, xLabel, yLabel, metricKey, series })
             const y = padding + ((height - padding * 2) / 3) * index + 4;
             return (
               <text key={`y-tick-${index}`} x={padding - 10} y={y} textAnchor="end" className="evaluation-chart-tick">
-                {formatMetricValue(metricKey, tick)}
+                {formatYValue(tick)}
               </text>
             );
           })}
@@ -2822,8 +3207,8 @@ function ComparisonChart({ title, subtitle, xLabel, yLabel, metricKey, series })
             }}
           >
             <strong>{hoveredPoint.seriesLabel}</strong>
-            <span>{xLabel}: {formatCount(hoveredPoint.x)}</span>
-            <span>{yLabel}: {formatMetricValue(metricKey, hoveredPoint.y)}</span>
+            <span>{xLabel}: {formatXValue(hoveredPoint.x)}</span>
+            <span>{yLabel}: {formatYValue(hoveredPoint.y)}</span>
           </div>
         ) : null}
       </div>
@@ -3201,22 +3586,26 @@ function ArtifactsPage({ apiFetch }) {
             <p>Renseigne le chemin du modele entraine et la base de donnees a utiliser pour la visualisation.</p>
           </div>
           <div className="artifacts-form-grid">
-            <label className="field field-full-span">
-              <span>Chemin vers best.pt</span>
-              <input
-                value={checkpointPath}
-                onChange={(event) => setCheckpointPath(event.target.value)}
-                placeholder="/Users/.../runs/.../best.pt"
-              />
-            </label>
-            <label className="field field-full-span">
-              <span>Base de donnees</span>
-              <input
-                value={datasetPath}
-                onChange={(event) => setDatasetPath(event.target.value)}
-                placeholder="/Users/.../rf_dataset_v2"
-              />
-            </label>
+            <PathField
+              className="field-full-span"
+              label="Chemin vers best.pt"
+              value={checkpointPath}
+              onChange={setCheckpointPath}
+              apiFetch={apiFetch}
+              pickerKind="file"
+              pickerTitle="Choisir un checkpoint"
+              placeholder="/Users/.../runs/.../best.pt"
+            />
+            <PathField
+              className="field-full-span"
+              label="Base de donnees"
+              value={datasetPath}
+              onChange={setDatasetPath}
+              apiFetch={apiFetch}
+              pickerKind="directory"
+              pickerTitle="Choisir un dataset"
+              placeholder="/Users/.../rf_dataset_v2"
+            />
             <label className="field artifacts-split-field">
               <span>Split</span>
               <select value={datasetSplit} onChange={(event) => setDatasetSplit(event.target.value)}>

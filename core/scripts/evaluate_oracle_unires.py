@@ -514,7 +514,6 @@ def main() -> None:
         "oracle_iou": ORACLE_IOU,
         "model_specs": resolved_specs,
         "model_thresholds_for_1pct_fa": thresholds,
-        "oracle_stats": oracle_stats,
         "oracle_metrics": metrics,
     }
 

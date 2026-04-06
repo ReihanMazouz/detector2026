@@ -494,7 +494,6 @@ def main() -> None:
         "fusion_class_agnostic": FUSION_CLASS_AGNOSTIC,
         "model_specs": resolved_specs,
         "model_thresholds_for_1pct_fa": thresholds,
-        "fusion_stats": fusion_stats,
         "fusion_metrics": metrics,
     }
 

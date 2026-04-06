@@ -230,23 +230,126 @@ def _resolve_metrics_json(run_dir: Path, epoch: int) -> Path:
     raise HTTPException(status_code=404, detail=f"No metrics JSON found for epoch {epoch} in '{run_dir}'.")
 
 
+def _normalize_numeric_list(values: Any, *, field_name: str) -> List[float]:
+    if not isinstance(values, list):
+        raise HTTPException(status_code=404, detail=f"Invalid '{field_name}' series format in metrics JSON.")
+    return [float(value) for value in values]
+
+
+def _class_option_label(class_key: str) -> str:
+    try:
+        return f"Class {int(class_key)}"
+    except (TypeError, ValueError):
+        return str(class_key)
+
+
+def _sorted_class_keys(per_class: Dict[str, Any]) -> List[str]:
+    def _sort_key(key: str) -> tuple[int, int | str]:
+        try:
+            return (0, int(key))
+        except (TypeError, ValueError):
+            return (1, str(key))
+
+    return sorted(per_class.keys(), key=_sort_key)
+
+
 def evaluation_recall_snr(run_path: str, epoch: int) -> Dict[str, Any]:
     run_dir = _resolve_run_dir(run_path)
     metrics_path = _resolve_metrics_json(run_dir, epoch)
     payload = json.loads(metrics_path.read_text(encoding="utf-8"))
-    global_recall = payload.get("recall_snr", {}).get("global", {})
-    snr_bins = global_recall.get("snr_bins")
-    recall = global_recall.get("recall")
+    recall_payload = payload.get("recall_snr", {})
+    global_recall = recall_payload.get("global", {})
+    snr_bins = _normalize_numeric_list(global_recall.get("snr_bins"), field_name="recall_snr.global.snr_bins")
+    recall = _normalize_numeric_list(global_recall.get("recall"), field_name="recall_snr.global.recall")
+    per_class_raw = recall_payload.get("per_class", {})
 
-    if not isinstance(snr_bins, list) or not isinstance(recall, list):
-        raise HTTPException(status_code=404, detail=f"No recall_snr/global curve found in '{metrics_path.name}'.")
+    if not isinstance(per_class_raw, dict):
+        per_class_raw = {}
+
+    per_class: Dict[str, Dict[str, List[float]]] = {}
+    class_options: List[Dict[str, str]] = []
+    for class_key in _sorted_class_keys(per_class_raw):
+        class_payload = per_class_raw.get(class_key)
+        if not isinstance(class_payload, dict):
+            continue
+        class_options.append({"key": str(class_key), "label": _class_option_label(str(class_key))})
+        per_class[str(class_key)] = {
+            "snr_bins": _normalize_numeric_list(
+                class_payload.get("snr_bins", snr_bins),
+                field_name=f"recall_snr.per_class.{class_key}.snr_bins",
+            ),
+            "recall": _normalize_numeric_list(
+                class_payload.get("recall"),
+                field_name=f"recall_snr.per_class.{class_key}.recall",
+            ),
+        }
 
     return {
         "run_path": str(run_dir),
         "epoch": epoch,
         "metrics_json_path": str(metrics_path),
-        "snr_bins": snr_bins,
-        "recall": recall,
+        "global": {
+            "snr_bins": snr_bins,
+            "recall": recall,
+        },
+        "per_class": per_class,
+        "class_options": class_options,
+    }
+
+
+def evaluation_f1_stats(run_path: str, epoch: int) -> Dict[str, Any]:
+    run_dir = _resolve_run_dir(run_path)
+    metrics_path = _resolve_metrics_json(run_dir, epoch)
+    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    f1_payload = payload.get("f1_stats", {})
+
+    if not isinstance(f1_payload, dict):
+        raise HTTPException(status_code=404, detail=f"No f1_stats found in '{metrics_path.name}'.")
+
+    global_stats = {
+        "thr": _normalize_numeric_list(f1_payload.get("thr"), field_name="f1_stats.thr"),
+        "recall": _normalize_numeric_list(f1_payload.get("recall"), field_name="f1_stats.recall"),
+        "precision": _normalize_numeric_list(f1_payload.get("precision"), field_name="f1_stats.precision"),
+        "f1": _normalize_numeric_list(f1_payload.get("f1"), field_name="f1_stats.f1"),
+    }
+
+    per_class_raw = f1_payload.get("per_class", {})
+    if not isinstance(per_class_raw, dict):
+        per_class_raw = {}
+
+    per_class: Dict[str, Dict[str, List[float]]] = {}
+    class_options: List[Dict[str, str]] = []
+    for class_key in _sorted_class_keys(per_class_raw):
+        class_payload = per_class_raw.get(class_key)
+        if not isinstance(class_payload, dict):
+            continue
+        class_options.append({"key": str(class_key), "label": _class_option_label(str(class_key))})
+        per_class[str(class_key)] = {
+            "thr": _normalize_numeric_list(
+                class_payload.get("thr", global_stats["thr"]),
+                field_name=f"f1_stats.per_class.{class_key}.thr",
+            ),
+            "recall": _normalize_numeric_list(
+                class_payload.get("recall"),
+                field_name=f"f1_stats.per_class.{class_key}.recall",
+            ),
+            "precision": _normalize_numeric_list(
+                class_payload.get("precision"),
+                field_name=f"f1_stats.per_class.{class_key}.precision",
+            ),
+            "f1": _normalize_numeric_list(
+                class_payload.get("f1"),
+                field_name=f"f1_stats.per_class.{class_key}.f1",
+            ),
+        }
+
+    return {
+        "run_path": str(run_dir),
+        "epoch": epoch,
+        "metrics_json_path": str(metrics_path),
+        "global": global_stats,
+        "per_class": per_class,
+        "class_options": class_options,
     }
 
 
