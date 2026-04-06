@@ -43,6 +43,7 @@ REG_MAX = 16
 PREPROCESSING = "spectrogram_psnr"
 BATCH_SIZE = 16
 
+BASE_POSTPROCESS_CONF = 0.05
 POSTPROCESS_IOU = 0.1
 SAME_BOX_IOU = 0.9
 ORACLE_IOU = 0.5
@@ -275,7 +276,7 @@ def _run_one_model_on_one_sample(
             dist_out,
             cls_out,
             dist_out,
-            conf_thres=conf_thresh,
+            conf_thres=BASE_POSTPROCESS_CONF,
             iou_thres=POSTPROCESS_IOU,
             iou_same_box=SAME_BOX_IOU,
         )
@@ -285,6 +286,10 @@ def _run_one_model_on_one_sample(
         return torch.zeros((0, 6), dtype=torch.float32)
 
     detections = detections.detach().cpu().to(torch.float32)
+    detections = detections[detections[:, 4] >= float(conf_thresh)]
+    if len(detections) == 0:
+        return torch.zeros((0, 6), dtype=torch.float32)
+
     h, w = spec["res_hw"]
     normalized = torch.stack(
         [
