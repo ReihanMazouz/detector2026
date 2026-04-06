@@ -25,7 +25,7 @@ from detector2026.core.utils.analysing_results import (
     recall_per_snr_bin,
 )
 from detector2026.core.utils.dataset._common import load_label_items
-from detector2026.core.utils.fusion import oracle_or_post_nms
+from detector2026.core.utils.fusion import nms_fusion_post_nms
 from detector2026.core.utils.preprocess import build_preprocessor
 
 
@@ -41,24 +41,23 @@ NUM_CLASSES = 20
 WIDTH_MULT = 0.25  # YOLOv11n
 REG_MAX = 16
 PREPROCESSING = "spectrogram_psnr"
-BATCH_SIZE = 16
 
 POSTPROCESS_IOU = 0.1
 SAME_BOX_IOU = 0.9
-ORACLE_IOU = 0.5
+FUSION_NMS_IOU = 0.5
+EVAL_IOU = 0.5
+FUSION_CLASS_AGNOSTIC = False
 FALSE_ALARM_TARGET = 0.01
 
 # Deux options:
-# - "keep_model_thresholds": on garde l'oracle tel qu'il sort des modeles
+# - "keep_model_thresholds": on garde la fusion NMS telle qu'elle sort des modeles
 #   individuels deja regles a 1% de fausse alarme.
-# - "oracle_1pct_fa": on re-seuille ensuite l'oracle lui-meme pour viser 1% de
-#   fausse alarme.
+# - "fusion_1pct_fa": on re-seuille ensuite la fusion NMS elle-meme pour viser 1%
+#   de fausse alarme.
 FINAL_CONF_MODE = "keep_model_thresholds"
 
-OUTPUT_DIR = Path("/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/oracle_eval_simple")
+OUTPUT_DIR = Path("/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/nms_eval_simple")
 
-# Tous les modeles sont supposes etre des YOLOv11n specificres.
-# Il suffit d'ajouter/supprimer des entrees ici.
 MODEL_SPECS = [
     {
         "label": "cfg512",
@@ -71,12 +70,6 @@ MODEL_SPECS = [
     #     "checkpoint": "/Users/.../yolov11n_cfg256/best.pt",
     #     "res_key": "cfg256",
     #     "res_hw": (128, 128),
-    # },
-    # {
-    #     "label": "cfg1024",
-    #     "checkpoint": "/Users/.../yolov11n_cfg1024/best.pt",
-    #     "res_key": "cfg1024",
-    #     "res_hw": (512, 512),
     # },
 ]
 
@@ -121,7 +114,7 @@ def _json_default(obj: Any) -> Any:
 
 
 def _build_model() -> YOLOv11:
-    model = YOLOv11(
+    return YOLOv11(
         output_dir=str(OUTPUT_DIR),
         num_classes=NUM_CLASSES,
         width_mult=WIDTH_MULT,
@@ -129,7 +122,6 @@ def _build_model() -> YOLOv11:
         input_canals=1,
         device=DEVICE,
     )
-    return model
 
 
 def _safe_float(value: Any) -> float | None:
@@ -189,7 +181,6 @@ def _find_threshold_for_one_percent_fa(spec: Dict[str, Any]) -> float:
         if (1.0 - precision) <= FALSE_ALARM_TARGET:
             threshold = float(thr)
             break
-
     return threshold
 
 
@@ -220,15 +211,12 @@ def _load_gt(label_path: Path):
     gt_boxes = torch.tensor(gt_boxes, dtype=torch.float32) if gt_boxes else torch.zeros((0, 4), dtype=torch.float32)
     gt_labels = torch.tensor(gt_labels, dtype=torch.long) if gt_labels else torch.zeros((0,), dtype=torch.long)
     gt_snrs = torch.tensor(gt_snrs, dtype=torch.float32) if gt_snrs else torch.zeros((0,), dtype=torch.float32)
-
     return gt_boxes, gt_labels, gt_snrs, gt_psnrs
 
 
 def _load_raw_tensors(sample_path: Path) -> List[torch.Tensor]:
     raw = torch.load(sample_path, map_location="cpu")
-    if isinstance(raw, list):
-        return raw
-    return [raw]
+    return raw if isinstance(raw, list) else [raw]
 
 
 def _pick_tensor_for_resolution(raw_tensors: Sequence[torch.Tensor], res_hw: Tuple[int, int]) -> torch.Tensor:
@@ -270,7 +258,7 @@ def _run_one_model_on_one_sample(
 
     detections = detections.detach().cpu().to(torch.float32)
     h, w = spec["res_hw"]
-    normalized = torch.stack(
+    return torch.stack(
         [
             (detections[:, 0] / float(w)).clamp(0.0, 1.0),
             (detections[:, 1] / float(h)).clamp(0.0, 1.0),
@@ -281,28 +269,25 @@ def _run_one_model_on_one_sample(
         ],
         dim=1,
     )
-    return normalized
 
 
 def _avg_recall_between(snr_bins: Sequence[float], recall: Sequence[float], a: float, b: float) -> float:
     snr_bins = np.asarray(snr_bins, dtype=float)
     recall = np.asarray(recall, dtype=float)
-
     left = max(a, float(snr_bins[0]))
     right = min(b, float(snr_bins[-1]))
     if right <= left:
         return float("nan")
 
     area = 0.0
-    for k in range(len(recall)):
-        bin_left = snr_bins[k]
-        bin_right = snr_bins[k + 1]
+    for idx, value in enumerate(recall):
+        bin_left = snr_bins[idx]
+        bin_right = snr_bins[idx + 1]
         overlap_left = max(bin_left, left)
         overlap_right = min(bin_right, right)
         width = max(0.0, overlap_right - overlap_left)
         if width > 0:
-            area += float(recall[k]) * width
-
+            area += float(value) * width
     return float(area / max(right - left, 1e-12))
 
 
@@ -314,20 +299,20 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         class_index_to_name=CLASS_INDEX_TO_NAME,
     )
 
-    conf_thresh = 0.0
+    fusion_conf_thresh = 0.0
     for thr, precision in zip(f1_stats["thr"], f1_stats["precision"]):
         if (1.0 - precision) <= FALSE_ALARM_TARGET:
-            conf_thresh = float(thr)
+            fusion_conf_thresh = float(thr)
             break
 
     if FINAL_CONF_MODE == "keep_model_thresholds":
         applied_conf_thresh = 0.0
-    elif FINAL_CONF_MODE == "oracle_1pct_fa":
-        applied_conf_thresh = conf_thresh
+    elif FINAL_CONF_MODE == "fusion_1pct_fa":
+        applied_conf_thresh = fusion_conf_thresh
     else:
         raise ValueError(
             f"FINAL_CONF_MODE='{FINAL_CONF_MODE}' invalide. "
-            "Choisis 'keep_model_thresholds' ou 'oracle_1pct_fa'."
+            "Choisis 'keep_model_thresholds' ou 'fusion_1pct_fa'."
         )
 
     recall_snr = recall_per_snr_bin(
@@ -338,7 +323,6 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         class_index_to_name=CLASS_INDEX_TO_NAME,
         conf_thresh=applied_conf_thresh,
     )
-
     recall_size = recall_per_size_bin(
         stats,
         conf_thresh=applied_conf_thresh,
@@ -346,7 +330,6 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         class_index_to_name=CLASS_INDEX_TO_NAME,
         snr_min=10,
     )
-
     recall_max_psnr = recall_per_max_psnr_bin(
         stats,
         psnr_bins=list(range(0, 31)),
@@ -354,7 +337,6 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         with_classes=True,
         class_index_to_name=CLASS_INDEX_TO_NAME,
     )
-
     map_stats = map_from_stats(
         stats,
         iou_thresholds=np.linspace(0, 1, 21),
@@ -363,7 +345,6 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         conf_thresh=applied_conf_thresh,
         with_classes=True,
     )
-
     conf_matrix_high = confusion_matrix_snr(
         stats,
         snr_min=10,
@@ -399,7 +380,7 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
         "avg_recall_medium_snr": _avg_recall_between(recall_snr["global"]["snr_bins"], recall_snr["global"]["recall"], 0.0, 19.0),
         "avg_recall_high_snr": _avg_recall_between(recall_snr["global"]["snr_bins"], recall_snr["global"]["recall"], 10.0, 19.0),
         "final_conf_mode": FINAL_CONF_MODE,
-        "oracle_1pct_conf_thresh": conf_thresh,
+        "fusion_1pct_conf_thresh": fusion_conf_thresh,
         "applied_conf_thresh": applied_conf_thresh,
     }
 
@@ -449,12 +430,12 @@ def main() -> None:
         thresholds[spec["label"]] = threshold
         print(f"  - {spec['label']}: conf_thresh = {threshold:.4f}")
 
-    print("[3/4] Evaluation oracle")
+    print("[3/4] Evaluation fusion NMS")
     sample_paths = sorted((DATASET_PATH / SPLIT / "data").glob("*.pt"))
     labels_dir = DATASET_PATH / SPLIT / "labels_detect"
-    oracle_stats = {"tp": [], "fp": [], "fn": []}
+    fusion_stats = {"tp": [], "fp": [], "fn": []}
 
-    for sample_path in tqdm(sample_paths, desc="Oracle eval", unit="sample"):
+    for sample_path in tqdm(sample_paths, desc="NMS fusion eval", unit="sample"):
         label_path = labels_dir / f"{sample_path.stem}.json"
         gt_boxes, gt_labels, gt_snrs, gt_psnrs = _load_gt(label_path)
 
@@ -469,19 +450,17 @@ def main() -> None:
                 )
             )
 
-        oracle_output = oracle_or_post_nms(
+        fusion_output = nms_fusion_post_nms(
             prediction_sets=prediction_sets,
-            gt_boxes=gt_boxes,
-            gt_labels=gt_labels,
-            iou_thresh=ORACLE_IOU,
-            false_alarm_iou_thresh=ORACLE_IOU,
+            iou_thresh=FUSION_NMS_IOU,
+            agnostic=FUSION_CLASS_AGNOSTIC,
         )
 
-        oracle_predictions = oracle_output["oracle_predictions"]
-        if len(oracle_predictions) > 0:
-            pred_boxes = oracle_predictions[:, :4]
-            pred_scores = oracle_predictions[:, 4]
-            pred_labels = oracle_predictions[:, 5].long()
+        fused_predictions = fusion_output["fused_predictions"]
+        if len(fused_predictions) > 0:
+            pred_boxes = fused_predictions[:, :4]
+            pred_scores = fused_predictions[:, 4]
+            pred_labels = fused_predictions[:, 5].long()
         else:
             pred_boxes = torch.zeros((0, 4), dtype=torch.float32)
             pred_scores = torch.zeros((0,), dtype=torch.float32)
@@ -494,31 +473,32 @@ def main() -> None:
             gt_boxes=gt_boxes,
             gt_labels=gt_labels,
             gt_snrs=gt_snrs,
-            iou_thresh=ORACLE_IOU,
+            iou_thresh=EVAL_IOU,
             gt_psnrs=gt_psnrs,
             psnr_keys=PSNR_KEYS,
         )
-
-        oracle_stats["tp"].extend(sample_stats["tp"])
-        oracle_stats["fp"].extend(sample_stats["fp"])
-        oracle_stats["fn"].extend(sample_stats["fn"])
+        fusion_stats["tp"].extend(sample_stats["tp"])
+        fusion_stats["fp"].extend(sample_stats["fp"])
+        fusion_stats["fn"].extend(sample_stats["fn"])
 
     print("[4/4] Calcul des metriques finales")
-    metrics = _compute_full_metrics(oracle_stats)
+    metrics = _compute_full_metrics(fusion_stats)
 
     payload = {
         "dataset_path": str(DATASET_PATH),
         "split": SPLIT,
         "device": DEVICE,
         "false_alarm_target": FALSE_ALARM_TARGET,
-        "oracle_iou": ORACLE_IOU,
+        "fusion_nms_iou": FUSION_NMS_IOU,
+        "eval_iou": EVAL_IOU,
+        "fusion_class_agnostic": FUSION_CLASS_AGNOSTIC,
         "model_specs": resolved_specs,
         "model_thresholds_for_1pct_fa": thresholds,
-        "oracle_stats": oracle_stats,
-        "oracle_metrics": metrics,
+        "fusion_stats": fusion_stats,
+        "fusion_metrics": metrics,
     }
 
-    output_json = run_dir / "oracle_eval.json"
+    output_json = run_dir / "nms_fusion_eval.json"
     output_json.write_text(json.dumps(payload, indent=2, default=_json_default), encoding="utf-8")
 
     print("\n[Evaluation terminee]")
