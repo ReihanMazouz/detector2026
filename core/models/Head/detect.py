@@ -5,6 +5,7 @@ import math
 
 from ...nn.convs import Conv, DWConv
 from ...nn.blocks import DFL
+from ..anisotropic_utils import stride_hw_to_xy
 
 
 class Detect(nn.Module):
@@ -57,14 +58,24 @@ class Detect(nn.Module):
         """
         Initialise les biais des têtes bbox (DFL) et classification pour faciliter la convergence.
         """
+        if isinstance(image_size, int):
+            image_h = float(image_size)
+            image_w = float(image_size)
+        else:
+            image_h = float(image_size[0])
+            image_w = float(image_size[1])
+
         for a, b, s in zip(self.cv_dist, self.cv_clsobj, self.strides):
+            stride_x, stride_y = stride_hw_to_xy(s)
             # Initialisation des biais de la branche bbox (DFL)
             if hasattr(a[-1], "bias"):
                 a[-1].bias.data[:] = 1.0
 
             # Initialisation des biais de la branche classification
             if hasattr(b[-1], "bias"):
-                b[-1].bias.data[:self.nc] = math.log(5 / self.nc / (image_size / s) ** 2)
+                nx = max(image_w / stride_x, 1.0)
+                ny = max(image_h / stride_y, 1.0)
+                b[-1].bias.data[:self.nc] = math.log(5 / self.nc / (nx * ny))
 
     # def bias_init(self, image_size=(640, 640)):
     #     """
@@ -104,4 +115,3 @@ class Detect(nn.Module):
 
     #             # only first `nc` biases correspond to class logits
     #             cls_branch[-1].bias.data[:self.nc].fill_(bias_value)
-

@@ -13,6 +13,7 @@ if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
 from detector2026.core.models.mr_yolo import MR_YOLO
+from detector2026.core.models.tf_attn_yolo import TF_Attn_Yolo
 from detector2026.core.models.yolov8 import YOLOv8
 from detector2026.core.models.yolov11 import YOLOv11
 from detector2026.core.utils.preprocess import preprocessing_num_channels
@@ -56,6 +57,12 @@ def _build_model(config: Dict[str, Any]):
     width_mult = float(model_config.get("width_mult", 0.5))
     num_classes = int(model_config.get("num_classes", 20))
     input_channels = preprocessing_num_channels(training.get("preprocessing", "spectrogram_psnr"))
+    anisotropic = bool(model_config.get("anisotropic", False))
+    p3_size = tuple(model_config.get("p3_size", [64, 64]))
+    input_hw = None
+    if training.get("dataset_mode") in {"specificres", "singleres"}:
+        res_hw = model_config.get("res_hw", [256, 256])
+        input_hw = (int(res_hw[0]), int(res_hw[1]))
 
     if model_id == "mr_yolo":
         input_resolutions = _find_input_resolutions(str(config["dataset_path"]))
@@ -79,6 +86,9 @@ def _build_model(config: Dict[str, Any]):
             output_dir=output_dir,
             in_ch=input_channels,
             width_mult=width_mult,
+            anisotropic=anisotropic,
+            p3_size=p3_size,
+            input_hw=input_hw,
         )
 
     if model_id == "yolov11":
@@ -89,6 +99,22 @@ def _build_model(config: Dict[str, Any]):
             output_dir=output_dir,
             input_canals=input_channels,
             width_mult=width_mult,
+            anisotropic=anisotropic,
+            p3_size=p3_size,
+            input_hw=input_hw,
+        )
+
+    if model_id == "tf_attn_yolo":
+        return TF_Attn_Yolo(
+            num_classes=num_classes,
+            device=device,
+            reg_max=reg_max,
+            output_dir=output_dir,
+            input_canals=input_channels,
+            width_mult=width_mult,
+            anisotropic=anisotropic,
+            p3_size=p3_size,
+            input_hw=input_hw,
         )
 
     raise ValueError(f"Unsupported model_id '{model_id}'.")

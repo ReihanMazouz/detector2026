@@ -643,6 +643,7 @@ class BaseModel(nn.Module):
         anchor_points, stride_tensor = make_anchors(feats, self.strides)
         anchor_points = anchor_points.to(pred_dist.device)
         stride_tensor = stride_tensor.to(pred_dist.device)
+        stride_tensor_boxes = torch.cat([stride_tensor, stride_tensor], dim=1)
 
         # (4) DFL Projection — ⚠️ Cast `proj` to same dtype & device as `pred_dist`
         proj = torch.arange(self.reg_max, dtype=torch.float, device=pred_dist.device)
@@ -651,7 +652,7 @@ class BaseModel(nn.Module):
 
         # (5) Convertir les distances en boîtes
         pred_bboxes = dist2bbox(pred_ltrb, anchor_points, xywh=False)  # (B, N, 4)
-        pred_bboxes_abs = pred_bboxes * stride_tensor  # (B, N, 4)
+        pred_bboxes_abs = pred_bboxes * stride_tensor_boxes  # (B, N, 4)
 
         # (6) Score des classes
         cls_scores = pred_cls.sigmoid()  # (B, N, C)

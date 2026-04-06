@@ -26,6 +26,11 @@ METRIC_KEYS = [
     "avg_recall_high_snr",
 ]
 
+EVAL_ARTIFACTS = {
+    "oracle_eval.json": "oracle_metrics",
+    "nms_fusion_eval.json": "fusion_metrics",
+}
+
 
 def _safe_float(value: Any) -> float | None:
     try:
@@ -46,10 +51,46 @@ def _candidate_run_dirs() -> List[Path]:
         for child in root.iterdir():
             if not child.is_dir() or child in seen:
                 continue
-            if (child / "train_log.csv").is_file():
+            if (child / "train_log.csv").is_file() or _find_eval_artifact(child) is not None:
                 seen.add(child)
                 run_dirs.append(child)
     return sorted(run_dirs, key=lambda path: path.name.lower())
+
+
+def _find_eval_artifact(run_dir: Path) -> tuple[Path, str] | None:
+    for filename, metrics_key in EVAL_ARTIFACTS.items():
+        candidate = run_dir / filename
+        if candidate.is_file():
+            return candidate, metrics_key
+    return None
+
+
+def _load_eval_artifact(run_dir: Path) -> Dict[str, Any] | None:
+    artifact = _find_eval_artifact(run_dir)
+    if artifact is None:
+        return None
+
+    artifact_path, metrics_key = artifact
+    try:
+        raw_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid evaluation artifact in '{artifact_path.name}': {exc}") from exc
+
+    metrics_payload = raw_payload.get(metrics_key)
+    if not isinstance(metrics_payload, dict):
+        raise HTTPException(status_code=400, detail=f"Missing '{metrics_key}' in '{artifact_path.name}'.")
+
+    summary = metrics_payload.get("summary")
+    if not isinstance(summary, dict):
+        raise HTTPException(status_code=400, detail=f"Missing summary in '{artifact_path.name}'.")
+
+    return {
+        "artifact_path": artifact_path,
+        "metrics_key": metrics_key,
+        "raw_payload": raw_payload,
+        "metrics_payload": metrics_payload,
+        "summary": summary,
+    }
 
 
 def _read_train_log_rows(run_dir: Path) -> List[Dict[str, str]]:
@@ -147,7 +188,74 @@ def _extract_model_info(run_dir: Path, row: Dict[str, Any] | None) -> Dict[str, 
 def _run_summary(run_dir: Path) -> Dict[str, Any]:
     raw_rows = _read_train_log_rows(run_dir)
     if not raw_rows:
-        raise HTTPException(status_code=404, detail=f"No train_log.csv found for run '{run_dir.name}'.")
+        eval_artifact = _load_eval_artifact(run_dir)
+        if eval_artifact is None:
+            raise HTTPException(status_code=404, detail=f"No train_log.csv found for run '{run_dir.name}'.")
+
+        summary = eval_artifact["summary"]
+        artifact_path = eval_artifact["artifact_path"]
+        metric_snapshot = {
+            "train_loss": None,
+            "val_loss": None,
+            "map50": _safe_float(summary.get("map50")),
+            "map50_95": _safe_float(summary.get("map50_95")),
+            "avg_recall_low_snr": _safe_float(summary.get("avg_recall_low_snr")),
+            "avg_recall_medium_snr": _safe_float(summary.get("avg_recall_medium_snr")),
+            "avg_recall_high_snr": _safe_float(summary.get("avg_recall_high_snr")),
+        }
+        eval_label = "oracle eval" if eval_artifact["metrics_key"] == "oracle_metrics" else "nms fusion eval"
+        snapshot_base = {
+            "epoch": 1,
+            "metrics_json_path": str(artifact_path),
+            "metrics": metric_snapshot,
+        }
+
+        return {
+            "run_name": run_dir.name,
+            "path": str(run_dir),
+            "source": "examples" if "examples_of_training" in str(run_dir) else "runs",
+            "epochs_completed": 1,
+            "final_epoch": 1,
+            "final_metrics": metric_snapshot,
+            "final_model_info": {"params": None, "flops": None},
+            "best_snapshots": {
+                "checkpoint": {
+                    **snapshot_base,
+                    "label": eval_label,
+                    "metric_key": "map50_95",
+                    "metric_value": metric_snapshot["map50_95"],
+                    "model_info": {"params": None, "flops": None},
+                },
+                "val_loss": None,
+                "map50": {
+                    **snapshot_base,
+                    "label": "best mAP50",
+                    "metric_key": "map50",
+                    "metric_value": metric_snapshot["map50"],
+                },
+                "avg_recall_low_snr": {
+                    **snapshot_base,
+                    "label": "best recall low SNR",
+                    "metric_key": "avg_recall_low_snr",
+                    "metric_value": metric_snapshot["avg_recall_low_snr"],
+                },
+            },
+            "checkpoint_policy": {
+                "best_checkpoint_metric": "map50_95",
+                "best_checkpoint_mode": "max",
+                "early_stopping_metric": None,
+                "early_stopping_mode": None,
+            },
+            "artifacts": {
+                "best_pt": False,
+                "last_pt": False,
+                "loss_curves": False,
+                "map_curves": False,
+                "avg_recall_curves": False,
+                "model_summary": False,
+                "evaluation_artifact": artifact_path.name,
+            },
+        }
 
     epoch_rows = _epoch_rows(raw_rows)
     last_row = epoch_rows[-1]
@@ -209,7 +317,27 @@ def evaluation_run_details(run_path: str) -> Dict[str, Any]:
 
     raw_rows = _read_train_log_rows(path)
     if not raw_rows:
-        raise HTTPException(status_code=404, detail=f"No train_log.csv found for run '{path.name}'.")
+        eval_artifact = _load_eval_artifact(path)
+        if eval_artifact is None:
+            raise HTTPException(status_code=404, detail=f"No train_log.csv found for run '{path.name}'.")
+        summary = _run_summary(path)
+        return {
+            "summary": summary,
+            "epoch_rows": [
+                {
+                    "epoch": 1,
+                    "train_loss": None,
+                    "val_loss": None,
+                    "map50": summary["final_metrics"].get("map50"),
+                    "map50_95": summary["final_metrics"].get("map50_95"),
+                    "avg_recall_low_snr": summary["final_metrics"].get("avg_recall_low_snr"),
+                    "avg_recall_medium_snr": summary["final_metrics"].get("avg_recall_medium_snr"),
+                    "avg_recall_high_snr": summary["final_metrics"].get("avg_recall_high_snr"),
+                    "metrics_json_path": str(eval_artifact["artifact_path"]),
+                }
+            ],
+            "available_metrics": METRIC_KEYS,
+        }
 
     return {
         "summary": _run_summary(path),
@@ -218,14 +346,19 @@ def evaluation_run_details(run_path: str) -> Dict[str, Any]:
     }
 
 
-def _resolve_metrics_json(run_dir: Path, epoch: int) -> Path:
+def _load_metrics_payload(run_dir: Path, epoch: int) -> tuple[Path, Dict[str, Any]]:
+    eval_artifact = _load_eval_artifact(run_dir)
+    if eval_artifact is not None:
+        return eval_artifact["artifact_path"], eval_artifact["metrics_payload"]
+
     direct = run_dir / "metrics" / f"metrics_epoch_{epoch:03d}.json"
     if direct.is_file():
-        return direct
+        return direct, json.loads(direct.read_text(encoding="utf-8"))
 
     matches = sorted((run_dir / "metrics").glob(f"metrics_epoch_{epoch:03d}.json"))
     if matches:
-        return matches[0]
+        metrics_path = matches[0]
+        return metrics_path, json.loads(metrics_path.read_text(encoding="utf-8"))
 
     raise HTTPException(status_code=404, detail=f"No metrics JSON found for epoch {epoch} in '{run_dir}'.")
 
@@ -255,8 +388,7 @@ def _sorted_class_keys(per_class: Dict[str, Any]) -> List[str]:
 
 def evaluation_recall_snr(run_path: str, epoch: int) -> Dict[str, Any]:
     run_dir = _resolve_run_dir(run_path)
-    metrics_path = _resolve_metrics_json(run_dir, epoch)
-    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics_path, payload = _load_metrics_payload(run_dir, epoch)
     recall_payload = payload.get("recall_snr", {})
     global_recall = recall_payload.get("global", {})
     snr_bins = _normalize_numeric_list(global_recall.get("snr_bins"), field_name="recall_snr.global.snr_bins")
@@ -299,8 +431,7 @@ def evaluation_recall_snr(run_path: str, epoch: int) -> Dict[str, Any]:
 
 def evaluation_f1_stats(run_path: str, epoch: int) -> Dict[str, Any]:
     run_dir = _resolve_run_dir(run_path)
-    metrics_path = _resolve_metrics_json(run_dir, epoch)
-    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics_path, payload = _load_metrics_payload(run_dir, epoch)
     f1_payload = payload.get("f1_stats", {})
 
     if not isinstance(f1_payload, dict):
@@ -385,8 +516,7 @@ def _default_confusion_labels(size: int) -> List[str]:
 
 def evaluation_confusion_matrices(run_path: str, epoch: int) -> Dict[str, Any]:
     run_dir = _resolve_run_dir(run_path)
-    metrics_path = _resolve_metrics_json(run_dir, epoch)
-    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics_path, payload = _load_metrics_payload(run_dir, epoch)
 
     low_snr = _extract_confusion_matrix(payload, "conf_matrix_low_snr")
     medium_snr = _extract_confusion_matrix(payload, "conf_matrix_medium_snr")

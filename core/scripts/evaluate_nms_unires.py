@@ -25,7 +25,7 @@ from detector2026.core.utils.analysing_results import (
     recall_per_snr_bin,
 )
 from detector2026.core.utils.dataset._common import load_label_items
-from detector2026.core.utils.fusion import nms_fusion_post_nms
+from detector2026.core.utils.fusion_uni_res import nms_fusion_post_nms
 from detector2026.core.utils.preprocess import build_preprocessor
 
 
@@ -113,7 +113,20 @@ def _json_default(obj: Any) -> Any:
     return obj
 
 
-def _build_model() -> YOLOv11:
+def _build_model(spec: Dict[str, Any]) -> YOLOv11:
+    checkpoint_path = Path(spec["checkpoint"])
+    config_path = checkpoint_path.parent / "config.json"
+    anisotropic = False
+    p3_size = (64, 64)
+    if config_path.is_file():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            model_config = dict(config.get("model_config", {}))
+            anisotropic = bool(model_config.get("anisotropic", False))
+            p3_size = tuple(model_config.get("p3_size", [64, 64]))
+        except (OSError, json.JSONDecodeError):
+            pass
+
     return YOLOv11(
         output_dir=str(OUTPUT_DIR),
         num_classes=NUM_CLASSES,
@@ -121,6 +134,9 @@ def _build_model() -> YOLOv11:
         reg_max=REG_MAX,
         input_canals=1,
         device=DEVICE,
+        anisotropic=anisotropic,
+        p3_size=p3_size,
+        input_hw=tuple(spec["res_hw"]),
     )
 
 
@@ -415,7 +431,7 @@ def main() -> None:
         if not checkpoint.is_file():
             raise FileNotFoundError(f"Checkpoint introuvable: '{checkpoint}'.")
 
-        model = _build_model()
+        model = _build_model(spec)
         model.load_weights(str(checkpoint), device=DEVICE, eval_mode=True)
         model.eval()
         models.append(model)

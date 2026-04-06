@@ -105,6 +105,9 @@ def _build_model_from_config(config: Dict[str, Any], checkpoint_path: Path, num_
     device = "cpu"
     reg_max = int(model_config.get("reg_max", 16))
     width_mult = float(model_config.get("width_mult", 0.5))
+    anisotropic = bool(model_config.get("anisotropic", False))
+    p3_size = tuple(model_config.get("p3_size", [64, 64]))
+    input_hw = input_resolutions[0] if input_resolutions else None
 
     if model_id == "mr_yolo":
         return MR_YOLO(
@@ -124,6 +127,9 @@ def _build_model_from_config(config: Dict[str, Any], checkpoint_path: Path, num_
             reg_max=reg_max,
             output_dir=output_dir,
             width_mult=width_mult,
+            anisotropic=anisotropic,
+            p3_size=p3_size,
+            input_hw=input_hw,
         )
     if model_id == "yolov11":
         return YOLOv11(
@@ -132,6 +138,20 @@ def _build_model_from_config(config: Dict[str, Any], checkpoint_path: Path, num_
             reg_max=reg_max,
             output_dir=output_dir,
             width_mult=width_mult,
+            anisotropic=anisotropic,
+            p3_size=p3_size,
+            input_hw=input_hw,
+        )
+    if model_id == "tf_attn_yolo":
+        return TF_Attn_Yolo(
+            num_classes=num_classes,
+            device=device,
+            reg_max=reg_max,
+            output_dir=output_dir,
+            width_mult=width_mult,
+            anisotropic=anisotropic,
+            p3_size=p3_size,
+            input_hw=input_hw,
         )
     raise HTTPException(status_code=400, detail=f"model_id non supporte pour l'inference: '{model_id}'.")
 

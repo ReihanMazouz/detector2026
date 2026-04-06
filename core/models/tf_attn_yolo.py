@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 
 from ..nn.convs import Conv, DWConv
@@ -7,15 +8,46 @@ from ..nn.blocks import C3k2, SPPF, C2PSA, DFL, TFSepBlock  # TFSepBlock ajouté
 from .base import BaseModel
 from ..utils.loss import YOLODetectionLoss, SNRYOLODetectionLoss
 from .Head.detect import Detect
+from .anisotropic_utils import build_anisotropic_standard_plan
 
 
 class TF_Attn_Yolo(BaseModel):
-    def __init__(self, output_dir, num_classes=80, strides=[8, 16, 32], reg_max=16, device="cuda:0", input_canals=1, width_mult=0.25, debug=False):
+    def __init__(
+        self,
+        output_dir,
+        num_classes=80,
+        strides=None,
+        reg_max=16,
+        device="cuda:0",
+        input_canals=1,
+        width_mult=0.25,
+        debug=False,
+        anisotropic=False,
+        p3_size=(64, 64),
+        input_hw=None,
+    ):
         super().__init__(device=device, output_dir=output_dir)
         self.num_classes = num_classes
-        self.strides = strides
         self.reg_max = reg_max
         self.debug = debug
+        self.anisotropic = bool(anisotropic)
+        self.p3_size = tuple(p3_size)
+        self.input_hw = tuple(input_hw) if input_hw is not None else None
+
+        if strides is None:
+            strides = [8, 16, 32]
+
+        if self.anisotropic:
+            if self.input_hw is None:
+                raise ValueError("input_hw must be provided when anisotropic=True.")
+            anisotropic_plan = build_anisotropic_standard_plan(self.input_hw, self.p3_size)
+            self.pre_backbone_resize_hw = anisotropic_plan["pre_resize_hw"]
+            stage_strides = anisotropic_plan["stage_strides"]
+            self.strides = anisotropic_plan["detect_strides"]
+        else:
+            self.pre_backbone_resize_hw = None
+            stage_strides = [(2, 2), (2, 2), (2, 2)]
+            self.strides = strides
 
         # scaled channel counts
         c1 = int(64 * width_mult)
@@ -25,14 +57,14 @@ class TF_Attn_Yolo(BaseModel):
         c5 = int(1024 * width_mult)
 
         # ---------------- Backbone ----------------
-        self.conv1 = Conv(input_canals, c1, k=3, s=2)             # P1/2
-        self.conv2 = Conv(c1, c2, k=3, s=2)                        # P2/4
+        self.conv1 = Conv(input_canals, c1, k=3, s=stage_strides[0])             # P1/2
+        self.conv2 = Conv(c1, c2, k=3, s=stage_strides[1])                        # P2/4
 
         # Remplacement C3k2(c2 -> c3) par: adapt 1x1 (c2->c3) + TFSepBlock(ch=c3)
         self.c3_1_in = Conv(c2, c3, k=1, s=1)
         self.c3_1 = TFSepBlock(ch=c3, n=1, residual=True, mode="parallel")
 
-        self.conv3 = Conv(c3, c3, k=3, s=2)                        # P3/8
+        self.conv3 = Conv(c3, c3, k=3, s=stage_strides[2])                        # P3/8
         # Remplacement C3k2(c3 -> c3)
         self.c3_2 = TFSepBlock(ch=c3, n=1, residual=True, mode="parallel")
 
@@ -77,7 +109,7 @@ class TF_Attn_Yolo(BaseModel):
             reg_max=self.reg_max,
             strides=self.strides
         )
-        self.detect.bias_init(image_size=1024)
+        self.detect.bias_init(image_size=self.input_hw if self.input_hw is not None else 1024)
 
         # Loss
         self.criterion = YOLODetectionLoss(
@@ -90,7 +122,16 @@ class TF_Attn_Yolo(BaseModel):
 
         self.to(self.device)
 
+    def _prepare_input(self, x):
+        if self.pre_backbone_resize_hw is None:
+            return x
+        target_hw = tuple(self.pre_backbone_resize_hw)
+        if tuple(x.shape[-2:]) == target_hw:
+            return x
+        return F.interpolate(x, size=target_hw, mode="nearest")
+
     def forward(self, x):
+        x = self._prepare_input(x)
         # Backbone
         x = self.conv1(x)
         self.debug_shape("conv1", x)

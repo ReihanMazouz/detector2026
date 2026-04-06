@@ -459,6 +459,8 @@ MODEL_LIBRARY: Dict[str, Dict[str, Any]] = {
             "device": "cuda:0",
             "res_key": "cfg512",
             "res_hw": [256, 256],
+            "anisotropic": False,
+            "p3_size": [64, 64],
         },
         "options": {
             "devices": ["cuda:0", "cpu"],
@@ -608,6 +610,22 @@ MODEL_LIBRARY: Dict[str, Dict[str, Any]] = {
                 "group": "runtime",
                 "impact": "Choisit la cible de calcul au lancement.",
             },
+            {
+                "key": "anisotropic",
+                "label": "Anisotropic",
+                "type": "boolean",
+                "default": False,
+                "group": "backbone",
+                "impact": "Adapte les strides initiaux pour atteindre P3 avec une taille cible anisotrope.",
+            },
+            {
+                "key": "p3_size",
+                "label": "P3 size",
+                "type": "tuple",
+                "default": [64, 64],
+                "group": "backbone",
+                "impact": "Definit la taille cible de P3 lorsque le mode anisotrope est active.",
+            },
         ],
         "training_recipe": {
             "entrypoint": "test/train_unires.py",
@@ -644,6 +662,8 @@ MODEL_LIBRARY: Dict[str, Dict[str, Any]] = {
             "width_mult": 0.5,
             "reg_max": 16,
             "device": "cuda:0",
+            "anisotropic": False,
+            "p3_size": [64, 64],
         },
         "options": {
             "devices": ["cuda:0", "cpu"],
@@ -773,6 +793,22 @@ MODEL_LIBRARY: Dict[str, Dict[str, Any]] = {
                 "default": "cuda:0",
                 "group": "runtime",
                 "impact": "Choisit la cible de calcul au lancement.",
+            },
+            {
+                "key": "anisotropic",
+                "label": "Anisotropic",
+                "type": "boolean",
+                "default": False,
+                "group": "backbone",
+                "impact": "Adapte les strides initiaux pour atteindre P3 avec une taille cible anisotrope.",
+            },
+            {
+                "key": "p3_size",
+                "label": "P3 size",
+                "type": "tuple",
+                "default": [64, 64],
+                "group": "backbone",
+                "impact": "Definit la taille cible de P3 lorsque le mode anisotrope est active.",
             },
         ],
         "training_recipe": {

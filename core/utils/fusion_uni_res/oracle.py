@@ -63,6 +63,48 @@ def _box_area(boxes: torch.Tensor) -> torch.Tensor:
     return widths * heights
 
 
+def _maximum_bipartite_matching(
+    adjacency: Sequence[Sequence[int]],
+    candidate_scores: Sequence[Dict[int, float]],
+) -> Dict[int, int]:
+    """
+    Compute a maximum-cardinality GT->prediction assignment.
+
+    Tie-breaking is heuristic: GTs with fewer candidates are processed first,
+    and each GT tries higher-IoU predictions first.
+    """
+    ordered_gts = sorted(
+        range(len(adjacency)),
+        key=lambda gt_idx: (
+            len(adjacency[gt_idx]),
+            -max(candidate_scores[gt_idx].values(), default=-1.0),
+            gt_idx,
+        ),
+    )
+
+    pred_to_gt: Dict[int, int] = {}
+
+    def _try_assign(gt_idx: int, visited_preds: set[int]) -> bool:
+        ordered_preds = sorted(
+            adjacency[gt_idx],
+            key=lambda pred_idx: (-candidate_scores[gt_idx].get(pred_idx, 0.0), pred_idx),
+        )
+        for pred_idx in ordered_preds:
+            if pred_idx in visited_preds:
+                continue
+            visited_preds.add(pred_idx)
+            current_gt = pred_to_gt.get(pred_idx)
+            if current_gt is None or _try_assign(current_gt, visited_preds):
+                pred_to_gt[pred_idx] = gt_idx
+                return True
+        return False
+
+    for gt_idx in ordered_gts:
+        _try_assign(gt_idx, set())
+
+    return {gt_idx: pred_idx for pred_idx, gt_idx in pred_to_gt.items()}
+
+
 def _suppress_redundant_false_alarms(
     predictions: torch.Tensor,
     indices: Sequence[int],
@@ -159,10 +201,9 @@ def oracle_or_post_nms(
     else:
         all_predictions = _empty_output(device=device, dtype=dtype)
 
-    selected_indices: List[int] = []
     matched_indices = set()
     intersecting_indices = set()
-    per_gt_selection: List[Dict[str, Any]] = []
+    per_gt_candidates: List[Dict[str, Any]] = []
 
     for gt_index, (gt_box, gt_label) in enumerate(zip(gt_boxes, gt_labels)):
         if len(all_predictions) == 0:
@@ -172,12 +213,14 @@ def oracle_or_post_nms(
         candidate_indices = (ious >= iou_thresh).nonzero(as_tuple=True)[0].tolist()
 
         if not candidate_indices:
-            per_gt_selection.append(
+            per_gt_candidates.append(
                 {
                     "gt_index": gt_index,
                     "gt_label": int(gt_label.item()),
                     "candidate_indices": [],
-                    "selected_index": None,
+                    "class_filtered_indices": [],
+                    "retained_indices": [],
+                    "candidate_ious": {},
                 }
             )
             continue
@@ -189,20 +232,38 @@ def oracle_or_post_nms(
             if int(all_predictions[idx, 5].item()) == int(gt_label.item())
         ]
         retained_indices = cls_candidate_indices if cls_candidate_indices else candidate_indices
-        best_local = torch.argmax(ious[torch.as_tensor(retained_indices, device=device, dtype=torch.long)]).item()
-        best_index = retained_indices[best_local]
 
         matched_indices.update(retained_indices)
-        selected_indices.append(best_index)
-        per_gt_selection.append(
+        per_gt_candidates.append(
             {
                 "gt_index": gt_index,
                 "gt_label": int(gt_label.item()),
                 "candidate_indices": candidate_indices,
                 "class_filtered_indices": cls_candidate_indices,
                 "retained_indices": retained_indices,
-                "selected_index": best_index,
-                "selected_iou": float(ious[best_index].item()),
+                "candidate_ious": {idx: float(ious[idx].item()) for idx in retained_indices},
+            }
+        )
+
+    gt_adjacency = [entry["retained_indices"] for entry in per_gt_candidates]
+    gt_candidate_scores = [entry["candidate_ious"] for entry in per_gt_candidates]
+    gt_to_pred = _maximum_bipartite_matching(gt_adjacency, gt_candidate_scores)
+
+    selected_indices = []
+    per_gt_selection: List[Dict[str, Any]] = []
+    for entry in per_gt_candidates:
+        selected_index = gt_to_pred.get(entry["gt_index"])
+        if selected_index is not None:
+            selected_indices.append(selected_index)
+        per_gt_selection.append(
+            {
+                **entry,
+                "selected_index": selected_index,
+                "selected_iou": (
+                    float(entry["candidate_ious"][selected_index])
+                    if selected_index is not None
+                    else None
+                ),
             }
         )
 
@@ -214,7 +275,6 @@ def oracle_or_post_nms(
         false_alarm_iou_thresh,
     )
 
-    selected_indices = _unique_keep_order(selected_indices)
     oracle_indices = _unique_keep_order(selected_indices + oracle_false_alarm_indices)
 
     def _subset_sources(indices: Sequence[int]) -> List[Dict[str, int]]:

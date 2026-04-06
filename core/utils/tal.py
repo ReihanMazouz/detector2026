@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ..utils.metrics import bbox_iou
+from ..models.anisotropic_utils import stride_hw_to_xy
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):
     """Generate anchors from features."""
@@ -14,7 +15,10 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
         sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
         sy, sx = torch.meshgrid(sy, sx, indexing="ij")
         anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
-        stride_tensor.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
+        stride_x, stride_y = stride_hw_to_xy(stride)
+        stride_tensor.append(
+            torch.tensor([stride_x, stride_y], dtype=dtype, device=device).view(1, 2).repeat(h * w, 1)
+        )
     return torch.cat(anchor_points), torch.cat(stride_tensor)
 
 

@@ -4,6 +4,17 @@ import torch.nn.functional as F
 from .metrics import bbox_iou
 from .tal import make_anchors, bbox2dist, dist2bbox, TaskAlignedAssigner
 from .divers import xywh2xyxy, concat_levels
+from ..models.anisotropic_utils import stride_hw_to_xy
+
+
+def _stride_tensor_xyxy(stride_tensor):
+    return torch.cat([stride_tensor, stride_tensor], dim=1)
+
+
+def _image_size_from_feats(feat, stride_hw, device, dtype):
+    feat_h, feat_w = feat.shape[2:]
+    stride_x, stride_y = stride_hw_to_xy(stride_hw)
+    return torch.tensor([feat_h * stride_y, feat_w * stride_x], device=device, dtype=dtype)
 
 class DFLoss(nn.Module):
     """Criterion class for computing Distribution Focal Loss (DFL)."""
@@ -106,8 +117,9 @@ class YOLODetectionLoss:
         loss = torch.zeros(3, device=self.device)
         dtype = pred_scores.dtype
         batch_size = pred_scores.shape[0]
-        imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.strides[0]
+        imgsz = _image_size_from_feats(feats[0], self.strides[0], self.device, dtype)
         anchor_points, stride_tensor = make_anchors(feats, self.strides, 0.5)
+        stride_tensor_boxes = _stride_tensor_xyxy(stride_tensor)
 
         targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1)
         H, W = imgsz
@@ -121,7 +133,7 @@ class YOLODetectionLoss:
 
         _, target_bboxes, target_scores, fg_mask, _ = self.assigner(
             pred_scores.detach().sigmoid(),
-            (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
+            (pred_bboxes.detach() * stride_tensor_boxes).type(gt_bboxes.dtype),
             anchor_points * stride_tensor,
             gt_labels,
             gt_bboxes,
@@ -133,7 +145,7 @@ class YOLODetectionLoss:
 
         debug_data = []
         if fg_mask.sum():
-            target_bboxes /= stride_tensor
+            target_bboxes /= stride_tensor_boxes
             loss[0], loss[2] = self.bbox_loss(
                 pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask
             )
@@ -147,9 +159,9 @@ class YOLODetectionLoss:
             fg_inds = fg_inds.bool()
             debug_data.append({
                 "gt_boxes": gt_bboxes[b].detach().cpu(),
-                "task_selected_pred_boxes_abs": (pred_bboxes[b][fg_inds] * stride_tensor[fg_inds]).detach().cpu(),
+                "task_selected_pred_boxes_abs": (pred_bboxes[b][fg_inds] * stride_tensor_boxes[fg_inds]).detach().cpu(),
                 "task_selected_anchor_points_abs": (anchor_points[fg_inds] * stride_tensor[fg_inds]).detach().cpu(),
-                "pred_bboxes_abs": (pred_bboxes[b] * stride_tensor).detach().cpu()
+                "pred_bboxes_abs": (pred_bboxes[b] * stride_tensor_boxes).detach().cpu()
             })
 
         return loss.sum() * batch_size, [
@@ -217,8 +229,9 @@ class SNRYOLODetectionLoss:
 
         dtype = pred_scores.dtype
         batch_size = pred_scores.shape[0]
-        imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.strides[0]
+        imgsz = _image_size_from_feats(feats[0], self.strides[0], self.device, dtype)
         anchor_points, stride_tensor = make_anchors(feats, self.strides, 0.5)
+        stride_tensor_boxes = _stride_tensor_xyxy(stride_tensor)
 
         targets = torch.cat((batch["batch_idx"].view(-1, 1),
                             batch["cls"].view(-1, 1),
@@ -235,7 +248,7 @@ class SNRYOLODetectionLoss:
 
         _, target_bboxes, target_scores, fg_mask, matched_gt_inds = self.assigner(
             pred_scores.detach().sigmoid(),
-            (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
+            (pred_bboxes.detach() * stride_tensor_boxes).type(gt_bboxes.dtype),
             anchor_points * stride_tensor,
             gt_labels,
             gt_bboxes,
@@ -258,7 +271,7 @@ class SNRYOLODetectionLoss:
 
         debug_data = []
         if fg_mask.sum():
-            target_bboxes /= stride_tensor
+            target_bboxes /= stride_tensor_boxes
             loss[0], loss[2] = self.bbox_loss(
                 pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask
             )
@@ -271,9 +284,9 @@ class SNRYOLODetectionLoss:
             fg_inds = fg_mask[b]
             debug_data.append({
                 "gt_boxes": gt_bboxes[b].detach().cpu(),
-                "task_selected_pred_boxes_abs": (pred_bboxes[b][fg_inds] * stride_tensor[fg_inds]).detach().cpu(),
+                "task_selected_pred_boxes_abs": (pred_bboxes[b][fg_inds] * stride_tensor_boxes[fg_inds]).detach().cpu(),
                 "task_selected_anchor_points_abs": (anchor_points[fg_inds] * stride_tensor[fg_inds]).detach().cpu(),
-                "pred_bboxes_abs": (pred_bboxes[b] * stride_tensor).detach().cpu()
+                "pred_bboxes_abs": (pred_bboxes[b] * stride_tensor_boxes).detach().cpu()
             })
 
         return loss.sum() * batch_size, [

@@ -1,11 +1,13 @@
 # yolo_perso/models/YOLOv8.py
 import torch, torch.nn as nn
+import torch.nn.functional as F
 from ..nn.convs import Conv
 from ..nn.blocks import C2f, SPPF
 from ..utils.loss import YOLODetectionLoss
 from .Head.detect import Detect
 from .base import BaseModel
 import math
+from .anisotropic_utils import build_anisotropic_standard_plan
 
 class YOLOv8(BaseModel):
     """
@@ -22,15 +24,35 @@ class YOLOv8(BaseModel):
                  depth_mult: float = 0.33,
                  in_ch: int = 1,
                  reg_max: int = 16,
-                 strides=[8, 16, 32],
+                 strides=None,
                  device: str = "cuda:0",
-                 debug: bool = False):
+                 debug: bool = False,
+                 anisotropic: bool = False,
+                 p3_size=(64, 64),
+                 input_hw=None):
         super().__init__(device=device, output_dir=output_dir)
         self.nc, self.debug = num_classes, debug
         self.wm, self.dm = width_mult, depth_mult
         self.num_classes = num_classes
-        self.strides = strides
         self.reg_max = reg_max
+        self.anisotropic = bool(anisotropic)
+        self.p3_size = tuple(p3_size)
+        self.input_hw = tuple(input_hw) if input_hw is not None else None
+
+        if strides is None:
+            strides = [8, 16, 32]
+
+        if self.anisotropic:
+            if self.input_hw is None:
+                raise ValueError("input_hw must be provided when anisotropic=True.")
+            anisotropic_plan = build_anisotropic_standard_plan(self.input_hw, self.p3_size)
+            self.pre_backbone_resize_hw = anisotropic_plan["pre_resize_hw"]
+            stage_strides = anisotropic_plan["stage_strides"]
+            self.strides = anisotropic_plan["detect_strides"]
+        else:
+            self.pre_backbone_resize_hw = None
+            stage_strides = [(2, 2), (2, 2), (2, 2)]
+            self.strides = strides
 
         # ---------------- helper pour canaux / répétitions ---------------- #
         def c(x):  # applique width_mult et limite à 1024 (comme YAML)
@@ -43,11 +65,11 @@ class YOLOv8(BaseModel):
         c1, c2, c3, c4, c5 = map(c, (64, 128, 256, 512, 1024))
 
         # --------------------------- Backbone ---------------------------- #
-        self.b0 = Conv(in_ch, c1, 3, 2)                   # P1/2
-        self.b1 = Conv(c1,  c2, 3, 2)                    # P2/4
+        self.b0 = Conv(in_ch, c1, 3, stage_strides[0])                   # P1/2
+        self.b1 = Conv(c1,  c2, 3, stage_strides[1])                    # P2/4
         self.b2 = C2f(c2,  c2, n=r(3), shortcut=True)    # 3× C2f
 
-        self.b3 = Conv(c2,  c3, 3, 2)                    # P3/8
+        self.b3 = Conv(c2,  c3, 3, stage_strides[2])                    # P3/8
         self.b4 = C2f(c3,  c3, n=r(6), shortcut=True)
 
         self.b5 = Conv(c3,  c4, 3, 2)                    # P4/16
@@ -79,7 +101,7 @@ class YOLOv8(BaseModel):
             num_classes=self.nc,
             reg_max=reg_max,
             strides=self.strides)
-        self.detect.bias_init(image_size=1024)
+        self.detect.bias_init(image_size=self.input_hw if self.input_hw is not None else 1024)
 
         self.criterion = YOLODetectionLoss(
             num_classes=num_classes,
@@ -89,8 +111,17 @@ class YOLOv8(BaseModel):
 
         self.to(self.device)
 
+    def _prepare_input(self, x):
+        if self.pre_backbone_resize_hw is None:
+            return x
+        target_hw = tuple(self.pre_backbone_resize_hw)
+        if tuple(x.shape[-2:]) == target_hw:
+            return x
+        return F.interpolate(x, size=target_hw, mode="nearest")
+
     # --------------------------------------------------------------------- #
     def forward(self, x):
+        x = self._prepare_input(x)
         # Backbone
         x = self.b0(x)
         x = self.b1(x)
