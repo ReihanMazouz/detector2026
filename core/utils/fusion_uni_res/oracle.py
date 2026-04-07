@@ -46,6 +46,12 @@ def _gather_rows(tensor: torch.Tensor, indices: Sequence[int]) -> torch.Tensor:
     return tensor[torch.as_tensor(indices, device=tensor.device, dtype=torch.long)]
 
 
+def _sort_indices_by_score_desc(tensor: torch.Tensor, indices: Sequence[int]) -> List[int]:
+    if len(indices) <= 1:
+        return list(indices)
+    return sorted(indices, key=lambda idx: (-float(tensor[idx, 4].item()), int(idx)))
+
+
 def _unique_keep_order(indices: Sequence[int]) -> List[int]:
     seen = set()
     ordered: List[int] = []
@@ -267,6 +273,8 @@ def oracle_or_post_nms(
             }
         )
 
+    selected_indices = _sort_indices_by_score_desc(all_predictions, selected_indices)
+
     # False alarms are only predictions that do not intersect any ground truth.
     raw_false_alarm_indices = [idx for idx in range(len(all_predictions)) if idx not in intersecting_indices]
     oracle_false_alarm_indices = _suppress_redundant_false_alarms(
@@ -274,8 +282,12 @@ def oracle_or_post_nms(
         raw_false_alarm_indices,
         false_alarm_iou_thresh,
     )
+    oracle_false_alarm_indices = _sort_indices_by_score_desc(all_predictions, oracle_false_alarm_indices)
 
-    oracle_indices = _unique_keep_order(selected_indices + oracle_false_alarm_indices)
+    oracle_indices = _sort_indices_by_score_desc(
+        all_predictions,
+        _unique_keep_order(selected_indices + oracle_false_alarm_indices),
+    )
 
     def _subset_sources(indices: Sequence[int]) -> List[Dict[str, int]]:
         return [all_sources[idx] for idx in indices]

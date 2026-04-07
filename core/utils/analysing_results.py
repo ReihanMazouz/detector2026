@@ -967,83 +967,12 @@ def dataset_analysis_with_metrics(model,
                 json.dump(stats, f, indent=2)
             print(f"[✓] Stats sauvegardées dans {stats_path.resolve()}")
 
-    full_metrics = {}
-
-    # ─────── 1. Courbes P/R + détection seuil optimal ───────
-    F1_stats = precision_recall_stats(
-        stats, 
-        to_plot=to_plot, 
-        with_classes=True, 
-        class_index_to_name=CLASS_INDEX_TO_NAME
-    )
-    full_metrics['f1_stats'] = F1_stats
-
-    # Choisir conf_thresh ≈ seuil où FP rate ≤ fa
-    conf_thresh = 0.0
-    for thr, prec in zip(F1_stats["thr"], F1_stats["precision"]):
-        if (1 - prec) <= fa:
-            conf_thresh = thr
-            break
-
-    print(f"[INFO] Seuil de confiance sélectionné pour FP ≤ {fa:.3f} : {conf_thresh:.3f}")
-
-    # ─────── 2. Rappel par SNR ───────
-    recall_snr = recall_per_snr_bin(
+    full_metrics = stats_analysis_with_metrics(
         stats,
-        snr_bins=range(-20, 20),
-        to_plot=to_plot,
-        with_classes=True,
-        class_index_to_name=CLASS_INDEX_TO_NAME,
-        conf_thresh=conf_thresh
-    )
-    full_metrics['recall_snr'] = recall_snr
-
-    # ─────── 2a. Recall par TAILLE (relatif) ───────
-    recall_size = recall_per_size_bin(
-        stats,
-        conf_thresh=conf_thresh,
-        with_classes=True,
-        class_index_to_name=CLASS_INDEX_TO_NAME, 
-        snr_min=10
-    )
-    full_metrics['recall_size_minsnr10db'] = recall_size
-
-    # ─────── 2b. Recall par MAX_PSNR (dB) ───────
-    recall_max_psnr = recall_per_max_psnr_bin(
-        stats,
-        psnr_bins=list(range(0, 31)),  
-        conf_thresh=conf_thresh,
-        with_classes=True,
-        class_index_to_name=CLASS_INDEX_TO_NAME
-    )
-    full_metrics['recall_max_psnr'] = recall_max_psnr
-
-    # ─────── 3. mAP ───────
-    map_stats = map_from_stats(
-        stats,
-        iou_thresholds=np.linspace(0, 1, 21),
+        fa=fa,
         to_plot=to_plot,
         class_index_to_name=CLASS_INDEX_TO_NAME,
-        conf_thresh=conf_thresh
     )
-    full_metrics['map_stats'] = map_stats
-
-    # ─────── 4. Matrices de confusion (normalisées) ───────
-    for label, (snr_min, snr_max) in {
-        "high": (10, 20),
-        "medium": (0, 10),
-        "low": (-20, 0)
-    }.items():
-        mat = confusion_matrix_snr(
-            stats,
-            snr_min=snr_min,
-            snr_max=snr_max,
-            class_index_to_name=CLASS_INDEX_TO_NAME,
-            to_plot=to_plot,
-            conf_thresh=conf_thresh,
-            normalize='row'  
-        )
-        full_metrics[f"conf_matrix_{label}_snr"] = mat
 
     # ───────── Construction automatique de dummy_input ─────────
     try:
@@ -1094,5 +1023,85 @@ def dataset_analysis_with_metrics(model,
             json.dump(full_metrics, f, indent=2, default=convert)
 
         print(f"[✓] full_metrics sauvegardé en JSON dans : {save_path.resolve()}")
+
+    return full_metrics
+
+
+def stats_analysis_with_metrics(
+    stats,
+    fa: float = 0.01,
+    to_plot=False,
+    class_index_to_name=None,
+):
+    full_metrics = {}
+
+    f1_stats = precision_recall_stats(
+        stats,
+        to_plot=to_plot,
+        with_classes=True,
+        class_index_to_name=class_index_to_name,
+    )
+    full_metrics["f1_stats"] = f1_stats
+
+    conf_thresh = 0.0
+    for thr, prec in zip(f1_stats["thr"], f1_stats["precision"]):
+        if (1 - prec) <= fa:
+            conf_thresh = thr
+            break
+
+    print(f"[INFO] Seuil de confiance sélectionné pour FP ≤ {fa:.3f} : {conf_thresh:.3f}")
+
+    recall_snr = recall_per_snr_bin(
+        stats,
+        snr_bins=range(-20, 20),
+        to_plot=to_plot,
+        with_classes=True,
+        class_index_to_name=class_index_to_name,
+        conf_thresh=conf_thresh,
+    )
+    full_metrics["recall_snr"] = recall_snr
+
+    recall_size = recall_per_size_bin(
+        stats,
+        conf_thresh=conf_thresh,
+        with_classes=True,
+        class_index_to_name=class_index_to_name,
+        snr_min=10,
+    )
+    full_metrics["recall_size_minsnr10db"] = recall_size
+
+    recall_max_psnr = recall_per_max_psnr_bin(
+        stats,
+        psnr_bins=list(range(0, 31)),
+        conf_thresh=conf_thresh,
+        with_classes=True,
+        class_index_to_name=class_index_to_name,
+    )
+    full_metrics["recall_max_psnr"] = recall_max_psnr
+
+    map_stats = map_from_stats(
+        stats,
+        iou_thresholds=np.linspace(0, 1, 21),
+        to_plot=to_plot,
+        class_index_to_name=class_index_to_name,
+        conf_thresh=conf_thresh,
+    )
+    full_metrics["map_stats"] = map_stats
+
+    for label, (snr_min, snr_max) in {
+        "high": (10, 20),
+        "medium": (0, 10),
+        "low": (-20, 0),
+    }.items():
+        mat = confusion_matrix_snr(
+            stats,
+            snr_min=snr_min,
+            snr_max=snr_max,
+            class_index_to_name=class_index_to_name,
+            to_plot=to_plot,
+            conf_thresh=conf_thresh,
+            normalize="row",
+        )
+        full_metrics[f"conf_matrix_{label}_snr"] = mat
 
     return full_metrics

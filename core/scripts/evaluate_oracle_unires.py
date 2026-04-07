@@ -17,11 +17,7 @@ from detector2026.core.models.yolov11 import YOLOv11
 from detector2026.core.utils.analysing_results import (
     analyse_results,
     confusion_matrix_snr,
-    map_from_stats,
-    precision_recall_stats,
-    recall_per_max_psnr_bin,
-    recall_per_size_bin,
-    recall_per_snr_bin,
+    stats_analysis_with_metrics,
 )
 from detector2026.core.utils.dataset._common import load_label_items
 from detector2026.core.utils.fusion_uni_res import oracle_or_post_nms
@@ -62,7 +58,7 @@ OUTPUT_DIR = Path("/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/
 MODEL_SPECS = [
     {
         "label": "cfg512",
-        "checkpoint": "/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/examples_of_training/yolov11n_specificres/best.pt",
+        "checkpoint": "/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/examples_of_training/yolov11n_specificres_512/best.pt",
         "res_key": "cfg512",
         "res_hw": (256, 256),
     },
@@ -327,113 +323,23 @@ def _avg_recall_between(snr_bins: Sequence[float], recall: Sequence[float], a: f
 
 
 def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
-    f1_stats = precision_recall_stats(
+    metrics = stats_analysis_with_metrics(
         stats,
-        to_plot=False,
-        with_classes=True,
-        class_index_to_name=CLASS_INDEX_TO_NAME,
-    )
-
-    conf_thresh = 0.0
-    for thr, precision in zip(f1_stats["thr"], f1_stats["precision"]):
-        if (1.0 - precision) <= FALSE_ALARM_TARGET:
-            conf_thresh = float(thr)
-            break
-
-    if FINAL_CONF_MODE == "keep_model_thresholds":
-        applied_conf_thresh = 0.0
-    elif FINAL_CONF_MODE == "oracle_1pct_fa":
-        applied_conf_thresh = conf_thresh
-    else:
-        raise ValueError(
-            f"FINAL_CONF_MODE='{FINAL_CONF_MODE}' invalide. "
-            "Choisis 'keep_model_thresholds' ou 'oracle_1pct_fa'."
-        )
-
-    recall_snr = recall_per_snr_bin(
-        stats,
-        snr_bins=range(-20, 20),
-        to_plot=False,
-        with_classes=True,
-        class_index_to_name=CLASS_INDEX_TO_NAME,
-        conf_thresh=applied_conf_thresh,
-    )
-
-    recall_size = recall_per_size_bin(
-        stats,
-        conf_thresh=applied_conf_thresh,
-        with_classes=True,
-        class_index_to_name=CLASS_INDEX_TO_NAME,
-        snr_min=10,
-    )
-
-    recall_max_psnr = recall_per_max_psnr_bin(
-        stats,
-        psnr_bins=list(range(0, 31)),
-        conf_thresh=applied_conf_thresh,
-        with_classes=True,
-        class_index_to_name=CLASS_INDEX_TO_NAME,
-    )
-
-    map_stats = map_from_stats(
-        stats,
-        iou_thresholds=np.linspace(0, 1, 21),
+        fa=FALSE_ALARM_TARGET,
         to_plot=False,
         class_index_to_name=CLASS_INDEX_TO_NAME,
-        conf_thresh=applied_conf_thresh,
-        with_classes=True,
     )
-
-    conf_matrix_high = confusion_matrix_snr(
-        stats,
-        snr_min=10,
-        snr_max=20,
-        class_index_to_name=CLASS_INDEX_TO_NAME,
-        to_plot=False,
-        conf_thresh=applied_conf_thresh,
-        normalize="row",
-    )
-    conf_matrix_medium = confusion_matrix_snr(
-        stats,
-        snr_min=0,
-        snr_max=10,
-        class_index_to_name=CLASS_INDEX_TO_NAME,
-        to_plot=False,
-        conf_thresh=applied_conf_thresh,
-        normalize="row",
-    )
-    conf_matrix_low = confusion_matrix_snr(
-        stats,
-        snr_min=-20,
-        snr_max=0,
-        class_index_to_name=CLASS_INDEX_TO_NAME,
-        to_plot=False,
-        conf_thresh=applied_conf_thresh,
-        normalize="row",
-    )
-
-    summary = {
+    recall_snr = metrics["recall_snr"]
+    map_stats = metrics["map_stats"]
+    metrics["summary"] = {
         "map50": map_stats["mAP50"],
         "map50_95": map_stats["mAP50:95"],
         "avg_recall_low_snr": _avg_recall_between(recall_snr["global"]["snr_bins"], recall_snr["global"]["recall"], -10.0, 19.0),
         "avg_recall_medium_snr": _avg_recall_between(recall_snr["global"]["snr_bins"], recall_snr["global"]["recall"], 0.0, 19.0),
         "avg_recall_high_snr": _avg_recall_between(recall_snr["global"]["snr_bins"], recall_snr["global"]["recall"], 10.0, 19.0),
-        "final_conf_mode": FINAL_CONF_MODE,
-        "oracle_1pct_conf_thresh": conf_thresh,
-        "applied_conf_thresh": applied_conf_thresh,
+        "final_conf_mode": "dataset_analysis_with_metrics",
     }
-
-    return {
-        "summary": summary,
-        "f1_stats": f1_stats,
-        "recall_snr": recall_snr,
-        "recall_size_minsnr10db": recall_size,
-        "recall_max_psnr": recall_max_psnr,
-        "map_stats": map_stats,
-        "conf_matrix_high_snr": conf_matrix_high,
-        "conf_matrix_medium_snr": conf_matrix_medium,
-        "conf_matrix_low_snr": conf_matrix_low,
-    }
+    return metrics
 
 
 def main() -> None:
