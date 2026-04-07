@@ -4,7 +4,6 @@ import csv
 import json
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -423,8 +422,6 @@ def main() -> None:
         raise RuntimeError("MODEL_SPECS est vide. Ajoute au moins un modele.")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    run_dir = OUTPUT_DIR / datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir.mkdir(parents=True, exist_ok=True)
 
     print("[1/4] Chargement des modeles")
     models = []
@@ -518,7 +515,7 @@ def main() -> None:
         "fusion_metrics": metrics,
     }
 
-    output_json = run_dir / "nms_fusion_eval.json"
+    output_json = OUTPUT_DIR / "nms_fusion_eval.json"
     output_json.write_text(json.dumps(payload, indent=2, default=_json_default), encoding="utf-8")
 
     print("\n[Evaluation terminee]")
