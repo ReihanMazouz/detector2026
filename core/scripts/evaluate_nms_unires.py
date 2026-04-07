@@ -236,7 +236,6 @@ def _pick_tensor_for_resolution(raw_tensors: Sequence[torch.Tensor], res_hw: Tup
 def _run_one_model_on_one_sample(
     model: YOLOv11,
     spec: Dict[str, Any],
-    conf_thresh: float,
     sample_path: Path,
 ) -> torch.Tensor:
     raw_tensors = _load_raw_tensors(sample_path)
@@ -261,9 +260,6 @@ def _run_one_model_on_one_sample(
         return torch.zeros((0, 6), dtype=torch.float32)
 
     detections = detections.detach().cpu().to(torch.float32)
-    detections = detections[detections[:, 4] >= float(conf_thresh)]
-    if len(detections) == 0:
-        return torch.zeros((0, 6), dtype=torch.float32)
 
     h, w = spec["res_hw"]
     return torch.stack(
@@ -299,12 +295,16 @@ def _avg_recall_between(snr_bins: Sequence[float], recall: Sequence[float], a: f
     return float(area / max(right - left, 1e-12))
 
 
-def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+def _compute_full_metrics(
+    stats: Dict[str, List[Dict[str, Any]]],
+    model_conf_thresholds: Dict[int, float],
+) -> Dict[str, Any]:
     metrics = stats_analysis_with_metrics(
         stats,
         fa=FALSE_ALARM_TARGET,
         to_plot=False,
         class_index_to_name=CLASS_INDEX_TO_NAME,
+        model_conf_thresholds=model_conf_thresholds,
     )
     recall_snr = metrics["recall_snr"]
     map_stats = metrics["map_stats"]
@@ -358,12 +358,11 @@ def main() -> None:
         gt_boxes, gt_labels, gt_snrs, gt_psnrs = _load_gt(label_path)
 
         prediction_sets = []
-        for resolution_index, (model, spec) in enumerate(zip(models, resolved_specs)):
+        for model, spec in zip(models, resolved_specs):
             prediction_sets.append(
                 _run_one_model_on_one_sample(
                     model=model,
                     spec=spec,
-                    conf_thresh=thresholds_by_resolution[resolution_index],
                     sample_path=sample_path,
                 )
             )
@@ -392,6 +391,7 @@ def main() -> None:
             gt_labels=gt_labels,
             gt_snrs=gt_snrs,
             iou_thresh=EVAL_IOU,
+            pred_meta=fusion_output["fused_sources"],
             gt_psnrs=gt_psnrs,
             psnr_keys=PSNR_KEYS,
         )
@@ -400,7 +400,7 @@ def main() -> None:
         fusion_stats["fn"].extend(sample_stats["fn"])
 
     print("[4/4] Calcul des metriques finales")
-    metrics = _compute_full_metrics(fusion_stats)
+    metrics = _compute_full_metrics(fusion_stats, thresholds_by_resolution)
 
     payload = {
         "dataset_path": str(DATASET_PATH),
