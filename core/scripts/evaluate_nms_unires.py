@@ -236,6 +236,7 @@ def _pick_tensor_for_resolution(raw_tensors: Sequence[torch.Tensor], res_hw: Tup
 def _run_one_model_on_one_sample(
     model: YOLOv11,
     spec: Dict[str, Any],
+    conf_thresh: float,
     sample_path: Path,
 ) -> torch.Tensor:
     raw_tensors = _load_raw_tensors(sample_path)
@@ -260,6 +261,10 @@ def _run_one_model_on_one_sample(
         return torch.zeros((0, 6), dtype=torch.float32)
 
     detections = detections.detach().cpu().to(torch.float32)
+    detections = detections[detections[:, 4] >= float(conf_thresh)]
+    if len(detections) == 0:
+        return torch.zeros((0, 6), dtype=torch.float32)
+
     h, w = spec["res_hw"]
     return torch.stack(
         [
@@ -313,26 +318,6 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
     return metrics
 
 
-def _filter_predictions_with_sources(
-    predictions: torch.Tensor,
-    sources: Sequence[Dict[str, int]],
-    thresholds_by_resolution: Dict[int, float],
-) -> torch.Tensor:
-    if len(predictions) == 0 or len(sources) == 0:
-        return torch.zeros((0, 6), dtype=torch.float32)
-
-    kept_indices = []
-    for idx, source in enumerate(sources):
-        resolution_index = int(source["resolution_index"])
-        threshold = float(thresholds_by_resolution[resolution_index])
-        if float(predictions[idx, 4].item()) >= threshold:
-            kept_indices.append(idx)
-
-    if len(kept_indices) == 0:
-        return torch.zeros((0, 6), dtype=torch.float32)
-    return predictions[torch.as_tensor(kept_indices, dtype=torch.long)]
-
-
 def main() -> None:
     if len(MODEL_SPECS) == 0:
         raise RuntimeError("MODEL_SPECS est vide. Ajoute au moins un modele.")
@@ -373,11 +358,12 @@ def main() -> None:
         gt_boxes, gt_labels, gt_snrs, gt_psnrs = _load_gt(label_path)
 
         prediction_sets = []
-        for model, spec in zip(models, resolved_specs):
+        for resolution_index, (model, spec) in enumerate(zip(models, resolved_specs)):
             prediction_sets.append(
                 _run_one_model_on_one_sample(
                     model=model,
                     spec=spec,
+                    conf_thresh=thresholds_by_resolution[resolution_index],
                     sample_path=sample_path,
                 )
             )
@@ -388,11 +374,7 @@ def main() -> None:
             agnostic=FUSION_CLASS_AGNOSTIC,
         )
 
-        fused_predictions = _filter_predictions_with_sources(
-            fusion_output["fused_predictions"],
-            fusion_output["fused_sources"],
-            thresholds_by_resolution,
-        )
+        fused_predictions = fusion_output["fused_predictions"]
         if len(fused_predictions) > 0:
             pred_boxes = fused_predictions[:, :4]
             pred_scores = fused_predictions[:, 4]
