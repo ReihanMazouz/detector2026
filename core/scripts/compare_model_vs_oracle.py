@@ -239,7 +239,7 @@ def _metric_summary(metrics: Dict[str, Any]) -> Dict[str, float]:
     recall = recall_snr.get("recall", [])
 
     def _avg_recall_between(a: float, b: float) -> float:
-        if not snr_bins or not recall:
+        if len(snr_bins) == 0 or len(recall) == 0:
             return float("nan")
         snr_bins_np = np.asarray(snr_bins, dtype=float)
         recall_np = np.asarray(recall, dtype=float)
