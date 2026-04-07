@@ -23,10 +23,10 @@ from detector2026.core.utils.preprocess import preprocessing_num_channels
 # =====================================================================
 
 CHECKPOINT_PATH = Path(
-    "/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/examples_of_training/yolov11n_specificres_512/best.pt"
+    "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_512/best.pt"
 )
 DATASET_PATH = Path(
-    "/Users/tailleesarah/Documents/thèse/icml/ICML2026DataSimulator/examples/output/rf_dataset_v2"
+    "/data/RAWSIM/RMA/rf_dataset_thesis"
 )
 SPLIT = "val"
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
