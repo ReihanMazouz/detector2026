@@ -23,13 +23,13 @@ from detector2026.core.utils.preprocess import build_preprocessor
 # =====================================================================
 
 CHECKPOINT_PATH = Path(
-    "/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/examples_of_training/yolov11n_specificres_512/best.pt"
+    "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_512/best.pt"
 )
 DATASET_PATH = Path(
-    "/Users/tailleesarah/Documents/thèse/icml/ICML2026DataSimulator/examples/output/rf_dataset_v3"
+    "/data/RAWSIM/RMA/rf_dataset_thesis"
 )
 SPLIT = "val"
-DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
+DEVICE = "cuda:0" 
 OUTPUT_JSON = CHECKPOINT_PATH.parent / "compare_model_vs_oracle.json"
 
 NUM_CLASSES = 20
@@ -41,7 +41,7 @@ RES_HW = (256, 256)
 ANISOTROPIC = False
 P3_SIZE = (64, 64)
 
-SAMPLE_LIMIT = 10
+SAMPLE_LIMIT = 100
 BASE_POSTPROCESS_CONF = 0.05
 POSTPROCESS_IOU = 0.1
 SAME_BOX_IOU = 0.9
