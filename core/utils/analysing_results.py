@@ -1032,6 +1032,7 @@ def stats_analysis_with_metrics(
     fa: float = 0.01,
     to_plot=False,
     class_index_to_name=None,
+    conf_thresh: Optional[float] = None,
 ):
     full_metrics = {}
 
@@ -1043,13 +1044,15 @@ def stats_analysis_with_metrics(
     )
     full_metrics["f1_stats"] = f1_stats
 
-    conf_thresh = 0.0
-    for thr, prec in zip(f1_stats["thr"], f1_stats["precision"]):
-        if (1 - prec) <= fa:
-            conf_thresh = thr
-            break
+    if conf_thresh is None:
+        conf_thresh = 0.0
+        for thr, prec in zip(f1_stats["thr"], f1_stats["precision"]):
+            if (1 - prec) <= fa:
+                conf_thresh = thr
+                break
 
     print(f"[INFO] Seuil de confiance sélectionné pour FP ≤ {fa:.3f} : {conf_thresh:.3f}")
+    full_metrics["conf_thresh"] = float(conf_thresh)
 
     recall_snr = recall_per_snr_bin(
         stats,

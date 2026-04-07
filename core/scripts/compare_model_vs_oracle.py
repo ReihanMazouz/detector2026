@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import sys
@@ -102,6 +103,64 @@ def _build_model() -> YOLOv11:
     model.load_weights(str(CHECKPOINT_PATH), device=DEVICE, eval_mode=True)
     model.eval()
     return model
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value in ("", None):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_metrics_json() -> Path:
+    run_dir = CHECKPOINT_PATH.parent
+    train_log_path = run_dir / "train_log.csv"
+    if not train_log_path.is_file():
+        raise FileNotFoundError(f"train_log.csv introuvable dans '{run_dir}'.")
+
+    with train_log_path.open("r", newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    if not rows:
+        raise RuntimeError(f"train_log.csv est vide dans '{run_dir}'.")
+
+    best_row = None
+    best_score = None
+    for row in rows:
+        score = _safe_float(row.get("map50_95"))
+        if score is None:
+            continue
+        if best_score is None or score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_row is None:
+        raise RuntimeError(f"Aucune valeur map50_95 exploitable dans '{train_log_path}'.")
+
+    epoch_value = _safe_float(best_row.get("epoch"))
+    if epoch_value is None:
+        raise RuntimeError(f"Impossible de lire l'epoch associee au best.pt dans '{train_log_path}'.")
+
+    metrics_path = run_dir / "metrics" / f"metrics_epoch_{int(epoch_value):03d}.json"
+    if not metrics_path.is_file():
+        raise FileNotFoundError(f"Le metrics JSON de l'epoch best.pt est introuvable: '{metrics_path}'.")
+    return metrics_path
+
+
+def _find_threshold_for_one_percent_fa() -> float:
+    metrics_json = _resolve_metrics_json()
+    payload = json.loads(metrics_json.read_text(encoding="utf-8"))
+    pr = payload["f1_stats"]
+
+    threshold = 0.0
+    for thr, precision in zip(pr["thr"], pr["precision"]):
+        if (1.0 - precision) <= FALSE_ALARM_TARGET:
+            threshold = float(thr)
+            break
+
+    return threshold
 
 
 def _load_gt(label_path: Path) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[List[float]]]:
@@ -218,6 +277,12 @@ def _stats_from_predictions(
     )
 
 
+def _filter_predictions_by_conf(predictions: torch.Tensor, conf_thresh: float) -> torch.Tensor:
+    if len(predictions) == 0:
+        return predictions
+    return predictions[predictions[:, 4] >= float(conf_thresh)]
+
+
 def _count_stats(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, int]:
     return {
         "tp": len(stats["tp"]),
@@ -281,6 +346,8 @@ def main() -> None:
 
     print("[1/4] Chargement du modele")
     model = _build_model()
+    applied_conf_thresh = _find_threshold_for_one_percent_fa()
+    print(f"    Seuil fixe applique : {applied_conf_thresh:.6f}")
 
     print("[2/4] Comparaison modele seul vs oracle")
     model_stats = {"tp": [], "fp": [], "fn": []}
@@ -291,7 +358,10 @@ def main() -> None:
         label_path = labels_dir / f"{sample_path.stem}.json"
         gt_boxes, gt_labels, gt_snrs, gt_psnrs = _load_gt(label_path)
 
-        model_predictions = _run_model_on_sample(model, sample_path)
+        model_predictions = _filter_predictions_by_conf(
+            _run_model_on_sample(model, sample_path),
+            applied_conf_thresh,
+        )
         oracle_output = oracle_or_post_nms(
             prediction_sets=[model_predictions],
             gt_boxes=gt_boxes,
@@ -299,7 +369,10 @@ def main() -> None:
             iou_thresh=EVAL_IOU,
             false_alarm_iou_thresh=EVAL_IOU,
         )
-        oracle_predictions = oracle_output["oracle_predictions"].detach().cpu().to(torch.float32)
+        oracle_predictions = _filter_predictions_by_conf(
+            oracle_output["oracle_predictions"].detach().cpu().to(torch.float32),
+            applied_conf_thresh,
+        )
         model_sample_stats = _stats_from_predictions(model_predictions, gt_boxes, gt_labels, gt_snrs, gt_psnrs)
         oracle_sample_stats = _stats_from_predictions(oracle_predictions, gt_boxes, gt_labels, gt_snrs, gt_psnrs)
 
@@ -332,12 +405,14 @@ def main() -> None:
         fa=FALSE_ALARM_TARGET,
         to_plot=False,
         class_index_to_name=CLASS_INDEX_TO_NAME,
+        conf_thresh=applied_conf_thresh,
     )
     oracle_metrics = stats_analysis_with_metrics(
         oracle_stats,
         fa=FALSE_ALARM_TARGET,
         to_plot=False,
         class_index_to_name=CLASS_INDEX_TO_NAME,
+        conf_thresh=applied_conf_thresh,
     )
 
     print("[4/4] Sauvegarde du resultat")
@@ -349,6 +424,7 @@ def main() -> None:
         "sample_limit": SAMPLE_LIMIT,
         "eval_iou": EVAL_IOU,
         "false_alarm_target": FALSE_ALARM_TARGET,
+        "applied_conf_thresh": applied_conf_thresh,
         "model_config": {
             "model_id": "yolov11",
             "num_classes": NUM_CLASSES,
