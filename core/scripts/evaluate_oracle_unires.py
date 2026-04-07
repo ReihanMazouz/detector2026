@@ -16,7 +16,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 from detector2026.core.models.yolov11 import YOLOv11
 from detector2026.core.utils.analysing_results import (
     analyse_results,
-    confusion_matrix_snr,
     stats_analysis_with_metrics,
 )
 from detector2026.core.utils.dataset._common import load_label_items

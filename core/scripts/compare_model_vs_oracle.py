@@ -264,7 +264,6 @@ def main() -> None:
             false_alarm_iou_thresh=EVAL_IOU,
         )
         oracle_predictions = oracle_output["oracle_predictions"].detach().cpu().to(torch.float32)
-
         model_sample_stats = _stats_from_predictions(model_predictions, gt_boxes, gt_labels, gt_snrs, gt_psnrs)
         oracle_sample_stats = _stats_from_predictions(oracle_predictions, gt_boxes, gt_labels, gt_snrs, gt_psnrs)
 

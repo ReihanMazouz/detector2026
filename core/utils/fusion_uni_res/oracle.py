@@ -69,48 +69,6 @@ def _box_area(boxes: torch.Tensor) -> torch.Tensor:
     return widths * heights
 
 
-def _maximum_bipartite_matching(
-    adjacency: Sequence[Sequence[int]],
-    candidate_scores: Sequence[Dict[int, float]],
-) -> Dict[int, int]:
-    """
-    Compute a maximum-cardinality GT->prediction assignment.
-
-    Tie-breaking is heuristic: GTs with fewer candidates are processed first,
-    and each GT tries higher-IoU predictions first.
-    """
-    ordered_gts = sorted(
-        range(len(adjacency)),
-        key=lambda gt_idx: (
-            len(adjacency[gt_idx]),
-            -max(candidate_scores[gt_idx].values(), default=-1.0),
-            gt_idx,
-        ),
-    )
-
-    pred_to_gt: Dict[int, int] = {}
-
-    def _try_assign(gt_idx: int, visited_preds: set[int]) -> bool:
-        ordered_preds = sorted(
-            adjacency[gt_idx],
-            key=lambda pred_idx: (-candidate_scores[gt_idx].get(pred_idx, 0.0), pred_idx),
-        )
-        for pred_idx in ordered_preds:
-            if pred_idx in visited_preds:
-                continue
-            visited_preds.add(pred_idx)
-            current_gt = pred_to_gt.get(pred_idx)
-            if current_gt is None or _try_assign(current_gt, visited_preds):
-                pred_to_gt[pred_idx] = gt_idx
-                return True
-        return False
-
-    for gt_idx in ordered_gts:
-        _try_assign(gt_idx, set())
-
-    return {gt_idx: pred_idx for pred_idx, gt_idx in pred_to_gt.items()}
-
-
 def _suppress_redundant_false_alarms(
     predictions: torch.Tensor,
     indices: Sequence[int],
@@ -207,7 +165,6 @@ def oracle_or_post_nms(
     else:
         all_predictions = _empty_output(device=device, dtype=dtype)
 
-    matched_indices = set()
     intersecting_indices = set()
     per_gt_candidates: List[Dict[str, Any]] = []
 
@@ -233,34 +190,37 @@ def oracle_or_post_nms(
 
         intersecting_indices.update(candidate_indices)
 
-        cls_candidate_indices = [
-            idx for idx in candidate_indices
-            if int(all_predictions[idx, 5].item()) == int(gt_label.item())
-        ]
-        retained_indices = cls_candidate_indices if cls_candidate_indices else candidate_indices
-
-        matched_indices.update(retained_indices)
         per_gt_candidates.append(
             {
                 "gt_index": gt_index,
                 "gt_label": int(gt_label.item()),
                 "candidate_indices": candidate_indices,
-                "class_filtered_indices": cls_candidate_indices,
-                "retained_indices": retained_indices,
-                "candidate_ious": {idx: float(ious[idx].item()) for idx in retained_indices},
+                "class_filtered_indices": [],
+                "retained_indices": candidate_indices,
+                "candidate_ious": {idx: float(ious[idx].item()) for idx in candidate_indices},
             }
         )
 
-    gt_adjacency = [entry["retained_indices"] for entry in per_gt_candidates]
-    gt_candidate_scores = [entry["candidate_ious"] for entry in per_gt_candidates]
-    gt_to_pred = _maximum_bipartite_matching(gt_adjacency, gt_candidate_scores)
-
     selected_indices = []
+    gt_to_pred: Dict[int, int] = {}
+    matched_gt = set()
+    if len(all_predictions) > 0 and len(gt_boxes) > 0:
+        ious = box_iou(all_predictions[:, :4], gt_boxes)
+        ordered_pred_indices = _sort_indices_by_score_desc(all_predictions, range(len(all_predictions)))
+        for pred_idx in ordered_pred_indices:
+            row = ious[pred_idx]
+            max_iou, gt_idx = row.max(dim=0)
+            gt_idx = int(gt_idx.item())
+            max_iou = float(max_iou.item())
+            if max_iou < iou_thresh or gt_idx in matched_gt:
+                continue
+            matched_gt.add(gt_idx)
+            gt_to_pred[gt_idx] = int(pred_idx)
+            selected_indices.append(int(pred_idx))
+
     per_gt_selection: List[Dict[str, Any]] = []
     for entry in per_gt_candidates:
         selected_index = gt_to_pred.get(entry["gt_index"])
-        if selected_index is not None:
-            selected_indices.append(selected_index)
         per_gt_selection.append(
             {
                 **entry,
@@ -272,8 +232,6 @@ def oracle_or_post_nms(
                 ),
             }
         )
-
-    selected_indices = _sort_indices_by_score_desc(all_predictions, selected_indices)
 
     # False alarms are only predictions that do not intersect any ground truth.
     raw_false_alarm_indices = [idx for idx in range(len(all_predictions)) if idx not in intersecting_indices]
@@ -298,9 +256,9 @@ def oracle_or_post_nms(
         "selected_indices": selected_indices,
         "selected_predictions": _gather_rows(all_predictions, selected_indices),
         "selected_sources": _subset_sources(selected_indices),
-        "matched_indices": sorted(matched_indices),
-        "matched_predictions": _gather_rows(all_predictions, sorted(matched_indices)),
-        "matched_sources": _subset_sources(sorted(matched_indices)),
+        "matched_indices": selected_indices,
+        "matched_predictions": _gather_rows(all_predictions, selected_indices),
+        "matched_sources": _subset_sources(selected_indices),
         "intersecting_indices": sorted(intersecting_indices),
         "intersecting_predictions": _gather_rows(all_predictions, sorted(intersecting_indices)),
         "intersecting_sources": _subset_sources(sorted(intersecting_indices)),
