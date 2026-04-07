@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -49,9 +50,15 @@ FALSE_ALARM_TARGET = 0.01
 def _json_default(obj: Any) -> Any:
     if isinstance(obj, Path):
         return str(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
     if torch.is_tensor(obj):
         return obj.detach().cpu().tolist()
-    return obj
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 def main() -> None:
