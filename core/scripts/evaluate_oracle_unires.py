@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import sys
@@ -134,6 +135,67 @@ def _build_model(spec: Dict[str, Any]) -> YOLOv11:
     return model
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value in ("", None):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_metrics_json(spec: Dict[str, Any]) -> Path:
+    checkpoint_path = Path(spec["checkpoint"])
+    run_dir = checkpoint_path.parent
+    train_log_path = run_dir / "train_log.csv"
+    if not train_log_path.is_file():
+        raise FileNotFoundError(f"train_log.csv introuvable dans '{run_dir}'.")
+
+    with train_log_path.open("r", newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    if not rows:
+        raise RuntimeError(f"train_log.csv est vide dans '{run_dir}'.")
+
+    best_row = None
+    best_score = None
+    for row in rows:
+        score = _safe_float(row.get("map50_95"))
+        if score is None:
+            continue
+        if best_score is None or score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_row is None:
+        raise RuntimeError(f"Aucune valeur map50_95 exploitable dans '{train_log_path}'.")
+
+    epoch_value = _safe_float(best_row.get("epoch"))
+    if epoch_value is None:
+        raise RuntimeError(f"Impossible de lire l'epoch associee au best.pt dans '{train_log_path}'.")
+
+    metrics_path = run_dir / "metrics" / f"metrics_epoch_{int(epoch_value):03d}.json"
+    if not metrics_path.is_file():
+        raise FileNotFoundError(
+            f"Le metrics JSON de l'epoch best.pt est introuvable: '{metrics_path}'."
+        )
+    return metrics_path
+
+
+def _find_threshold_for_one_percent_fa(spec: Dict[str, Any]) -> float:
+    metrics_json = _resolve_metrics_json(spec)
+    payload = json.loads(metrics_json.read_text(encoding="utf-8"))
+    pr = payload["f1_stats"]
+
+    threshold = 0.0
+    for thr, precision in zip(pr["thr"], pr["precision"]):
+        if (1.0 - precision) <= FALSE_ALARM_TARGET:
+            threshold = float(thr)
+            break
+
+    return threshold
+
+
 def _load_gt(label_path: Path):
     items = load_label_items(label_path)
 
@@ -265,6 +327,26 @@ def _compute_full_metrics(stats: Dict[str, List[Dict[str, Any]]]) -> Dict[str, A
     return metrics
 
 
+def _filter_predictions_with_sources(
+    predictions: torch.Tensor,
+    sources: Sequence[Dict[str, int]],
+    thresholds_by_resolution: Dict[int, float],
+) -> torch.Tensor:
+    if len(predictions) == 0 or len(sources) == 0:
+        return torch.zeros((0, 6), dtype=torch.float32)
+
+    kept_indices = []
+    for idx, source in enumerate(sources):
+        resolution_index = int(source["resolution_index"])
+        threshold = float(thresholds_by_resolution[resolution_index])
+        if float(predictions[idx, 4].item()) >= threshold:
+            kept_indices.append(idx)
+
+    if len(kept_indices) == 0:
+        return torch.zeros((0, 6), dtype=torch.float32)
+    return predictions[torch.as_tensor(kept_indices, dtype=torch.long)]
+
+
 def main() -> None:
     if len(MODEL_SPECS) == 0:
         raise RuntimeError("MODEL_SPECS est vide. Ajoute au moins un modele.")
@@ -274,6 +356,7 @@ def main() -> None:
     print("[1/4] Chargement des modeles")
     models = []
     resolved_specs = []
+    thresholds_by_resolution = {}
 
     for spec in MODEL_SPECS:
         checkpoint = Path(spec["checkpoint"])
@@ -288,8 +371,13 @@ def main() -> None:
         resolved_spec = dict(spec)
         resolved_spec["checkpoint"] = str(checkpoint)
         resolved_specs.append(resolved_spec)
+        thresholds_by_resolution[len(resolved_specs) - 1] = _find_threshold_for_one_percent_fa(resolved_spec)
 
-    print("[2/4] Evaluation oracle")
+    print("[2/4] Seuils par modele")
+    for resolution_index, spec in enumerate(resolved_specs):
+        print(f"  - {spec['label']}: conf_thresh = {thresholds_by_resolution[resolution_index]:.4f}")
+
+    print("[3/4] Evaluation oracle")
     sample_paths = sorted((DATASET_PATH / SPLIT / "data").glob("*.pt"))
     labels_dir = DATASET_PATH / SPLIT / "labels_detect"
     oracle_stats = {"tp": [], "fp": [], "fn": []}
@@ -316,7 +404,11 @@ def main() -> None:
             false_alarm_iou_thresh=ORACLE_IOU,
         )
 
-        oracle_predictions = oracle_output["oracle_predictions"]
+        oracle_predictions = _filter_predictions_with_sources(
+            oracle_output["oracle_predictions"],
+            oracle_output["oracle_sources"],
+            thresholds_by_resolution,
+        )
         if len(oracle_predictions) > 0:
             pred_boxes = oracle_predictions[:, :4]
             pred_scores = oracle_predictions[:, 4]
@@ -342,7 +434,7 @@ def main() -> None:
         oracle_stats["fp"].extend(sample_stats["fp"])
         oracle_stats["fn"].extend(sample_stats["fn"])
 
-    print("[3/4] Calcul des metriques finales")
+    print("[4/4] Calcul des metriques finales")
     metrics = _compute_full_metrics(oracle_stats)
 
     payload = {
@@ -352,6 +444,10 @@ def main() -> None:
         "false_alarm_target": FALSE_ALARM_TARGET,
         "oracle_iou": ORACLE_IOU,
         "model_specs": resolved_specs,
+        "model_thresholds_for_1pct_fa": {
+            resolved_specs[idx]["label"]: thresholds_by_resolution[idx]
+            for idx in thresholds_by_resolution
+        },
         "oracle_metrics": metrics,
     }
 
