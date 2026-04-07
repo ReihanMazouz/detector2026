@@ -42,10 +42,9 @@ SAME_BOX_IOU = 0.9
 ORACLE_IOU = 0.5
 FALSE_ALARM_TARGET = 0.01
 
-OUTPUT_DIR = Path("/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/oracle_eval_simple")
+OUTPUT_DIR = Path("/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/oracle")
 
 # Tous les modeles sont supposes etre des YOLOv11n specificres.
-# Il suffit d'ajouter/supprimer des entrees ici.
 MODEL_SPECS = [
     {
         "label": "cfg512",
@@ -55,15 +54,27 @@ MODEL_SPECS = [
     },
     # {
     #     "label": "cfg256",
-    #     "checkpoint": "/Users/.../yolov11n_cfg256/best.pt",
+    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_256/best.pt",
     #     "res_key": "cfg256",
-    #     "res_hw": (128, 128),
+    #     "res_hw": (128, 512),
+    # },
+    # {
+    #     "label": "cfg128",
+    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_128/best.pt",
+    #     "res_key": "cfg128",
+    #     "res_hw": (64, 1024),
+    # },
+    # {
+    #     "label": "cfg2048",
+    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_2048/best.pt",
+    #     "res_key": "cfg2048",
+    #     "res_hw": (1024, 64),
     # },
     # {
     #     "label": "cfg1024",
-    #     "checkpoint": "/Users/.../yolov11n_cfg1024/best.pt",
+    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_1024/best.pt",
     #     "res_key": "cfg1024",
-    #     "res_hw": (512, 512),
+    #     "res_hw": (512, 128),
     # },
 ]
 
