@@ -232,6 +232,42 @@ def _merge_stats(aggregate: Dict[str, List[Dict[str, Any]]], sample_stats: Dict[
     aggregate["fn"].extend(sample_stats["fn"])
 
 
+def _metric_summary(metrics: Dict[str, Any]) -> Dict[str, float]:
+    map_stats = metrics.get("map_stats", {})
+    recall_snr = metrics.get("recall_snr", {}).get("global", {})
+    snr_bins = recall_snr.get("snr_bins", [])
+    recall = recall_snr.get("recall", [])
+
+    def _avg_recall_between(a: float, b: float) -> float:
+        if not snr_bins or not recall:
+            return float("nan")
+        snr_bins_np = np.asarray(snr_bins, dtype=float)
+        recall_np = np.asarray(recall, dtype=float)
+        left = max(a, float(snr_bins_np[0]))
+        right = min(b, float(snr_bins_np[-1]))
+        if right <= left:
+            return float("nan")
+
+        area = 0.0
+        for k in range(len(recall_np)):
+            bin_left = snr_bins_np[k]
+            bin_right = snr_bins_np[k + 1]
+            overlap_left = max(bin_left, left)
+            overlap_right = min(bin_right, right)
+            width = max(0.0, overlap_right - overlap_left)
+            if width > 0:
+                area += float(recall_np[k]) * width
+        return float(area / max(right - left, 1e-12))
+
+    return {
+        "mAP50": float(map_stats.get("mAP50", float("nan"))),
+        "mAP50:95": float(map_stats.get("mAP50:95", float("nan"))),
+        "avg_recall_low_snr": _avg_recall_between(-10.0, 19.0),
+        "avg_recall_medium_snr": _avg_recall_between(0.0, 19.0),
+        "avg_recall_high_snr": _avg_recall_between(10.0, 19.0),
+    }
+
+
 def main() -> None:
     if not CHECKPOINT_PATH.is_file():
         raise FileNotFoundError(f"Checkpoint introuvable: '{CHECKPOINT_PATH}'")
@@ -339,6 +375,14 @@ def main() -> None:
     print(f"Resultat JSON : {OUTPUT_JSON}")
     print(f"Model counts  : {_count_stats(model_stats)}")
     print(f"Oracle counts : {_count_stats(oracle_stats)}")
+    print("\n[Metriques]")
+    model_summary = _metric_summary(model_metrics)
+    oracle_summary = _metric_summary(oracle_metrics)
+    for key in ("mAP50", "mAP50:95", "avg_recall_low_snr", "avg_recall_medium_snr", "avg_recall_high_snr"):
+        print(
+            f"{key:22s} "
+            f"model={model_summary[key]:.6f} | oracle={oracle_summary[key]:.6f}"
+        )
 
 
 if __name__ == "__main__":
