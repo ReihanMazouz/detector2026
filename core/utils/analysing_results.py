@@ -173,7 +173,10 @@ def analyse_dataset(model,
                 imgs, targets, batch_res_keys = batch
                 # Si psnr_keys non fourni, on peut tenter d'utiliser res_keys du collate
                 if psnr_keys is None and batch_res_keys is not None:
-                    psnr_keys = list(batch_res_keys)
+                    if isinstance(batch_res_keys, str):
+                        psnr_keys = [batch_res_keys]
+                    else:
+                        psnr_keys = list(batch_res_keys)
             else:
                 imgs, targets = batch
 
@@ -892,56 +895,8 @@ def dataset_analysis_with_metrics(model,
                                    img_size: int = 1024,
                                    to_save=False,
                                    to_plot=False, 
-                                   stats_path: Optional[Union[str, Path]] = None):
-
-    # CLASS_INDEX_TO_NAME = {
-    #     0: 'no_mod', 1: 'LFM', 2: 'NLFM', 3: 'frank', 4: 'P1', 5: 'P2',
-    #     6: 'P3', 7: 'P4', 8: 'random_biphasique', 9: 'FSK', 10: 'DSSS',
-    #     11: 'T1', 12: 'T2', 13: 'T3', 14: 'T4'
-    # }
-
-    # CLASS_INDEX_TO_NAME = {
-    # 0: 'no_mod', 1: 'LFM', 2: 'random_biphasique', 3: 'FSK', 4: 'DSSS', 5: 'QPSK', 6:'QAM16', 7:'QAM64', 8:'LFSK'
-    # }
-
-    # CLASS_INDEX_TO_NAME = {
-    #     0: "FSK_CODE1",
-    #     1: "FSK_CODE2",
-    #     2: "FSK_CODE3",
-    #     3: "FSK_CODE4",
-    # }
-
-    # CLASS_INDEX_TO_NAME = {
-    # 0: 'no_mod', 1: 'LFM', 2: 'random_biphasique', 3: 'FSK', 4: 'DSSS', 5: 'QPSK', 6:'QAM16', 7:'QAM64', 8:'FHSS', 9:'OFDM'
-    # }
-
-    # CLASS_INDEX_TO_NAME = {
-    # 0: 'Lb|Lo', 1: 'Oo', 2: 'Mn', 3: 'Pm'
-    # }
-
-    CLASS_INDEX_TO_NAME = {
-        0: "no_mod",
-        1: "LFM",
-        2: "NLFM",
-        3: "QFM",
-        4: "FMCW_TRI",
-        5: "barker_biphasique",
-        6: "random_biphasique",
-        7: "FSK",
-        8: "P1",
-        9: "P2",
-        10: "P3",
-        11: "P4",
-        12: "frank",
-        13: "T1",
-        14: "T2",
-        15: "T3",
-        16: "T4",
-        17: "OFDM",
-        18: "FHSS",
-        19: "DSSS",
-    }
-
+                                   stats_path: Optional[Union[str, Path]] = None,
+                                   class_index_to_name: Optional[Dict[int, str]] = None):
 
     # ─────── 0. Chargement / calcul des stats ───────
     stats = None
@@ -971,17 +926,28 @@ def dataset_analysis_with_metrics(model,
         stats,
         fa=fa,
         to_plot=to_plot,
-        class_index_to_name=CLASS_INDEX_TO_NAME,
+        class_index_to_name=class_index_to_name,
     )
 
     # ───────── Construction automatique de dummy_input ─────────
     try:
         # On récupère un batch du val_loader
         sample = next(iter(val_loader))
-        imgs = sample[0]               # imgs shape = (B, C, H, W)
-        _, C, H, W = imgs.shape
-
-        dummy_input = torch.randn(1, C, H, W, device=model.device)
+        imgs = sample[0]
+        if isinstance(imgs, torch.Tensor):
+            _, C, H, W = imgs.shape
+            dummy_input = torch.randn(1, C, H, W, device=model.device, dtype=torch.float32)
+        elif isinstance(imgs, list):
+            dummy_input = []
+            for img in imgs:
+                if not isinstance(img, torch.Tensor) or img.ndim != 4:
+                    raise ValueError("Expected a list of batched image tensors with shape (B, C, H, W).")
+                _, C, H, W = img.shape
+                dummy_input.append(
+                    torch.randn(1, C, H, W, device=model.device, dtype=torch.float32)
+                )
+        else:
+            raise ValueError(f"Unsupported batch image type for profiling: {type(imgs)}")
 
     except Exception:
         # fallback si val_loader vide

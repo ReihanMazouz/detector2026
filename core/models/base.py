@@ -2,6 +2,7 @@ import os
 import csv
 import copy
 import math
+import time
 from contextlib import nullcontext
 from tqdm import tqdm
 import json
@@ -19,6 +20,7 @@ from ..utils.dataset import (
     YOLODatasetFusedMultiRes,
     YOLODatasetSpecificRes,
     YOLODatasetSingleRes,
+    load_class_index_to_name,
 )
 from ..utils.display_outputs import plot_batch_with_boxes, plot_batch_matched_boxes, plot_predicted_boxes_batch
 from ..utils.training_functions import should_stop_early_from_csv
@@ -40,6 +42,30 @@ def _to_device(obj, device):
 
 def _supports_cuda(device):
     return device.type == "cuda" and torch.cuda.is_available()
+
+
+def _device_synchronize(device):
+    if _supports_cuda(device):
+        torch.cuda.synchronize(device)
+
+
+def _move_imgs_to_device(imgs, device, non_blocking=False):
+    if isinstance(imgs, list):
+        return [
+            img.to(device, dtype=torch.float32, non_blocking=non_blocking)
+            for img in imgs
+        ]
+    return imgs.to(device, dtype=torch.float32, non_blocking=non_blocking)
+
+
+def _resolve_num_workers(num_workers):
+    if num_workers is not None:
+        return max(0, int(num_workers))
+
+    cpu_count = os.cpu_count() or 1
+    if cpu_count <= 2:
+        return 0
+    return min(4, cpu_count - 1)
 
 
 class _NoOpGradScaler:
@@ -167,8 +193,13 @@ class BaseModel(nn.Module):
         dataset = 'fused',
         use_amp=True, 
         select_res = None,
-        preprocessing="spectrogram_psnr",
-        preprocessing_kwargs=None):
+        preprocessing="none",
+        preprocessing_kwargs=None,
+        num_workers=None,
+        persistent_workers=True,
+        full_eval_every=1,
+        save_last_every=5,
+        monitor="val_loss"):
         """
         Fonction d'apprentissage du modèle.
         """
@@ -177,6 +208,15 @@ class BaseModel(nn.Module):
         amp_enabled = bool(use_amp and _supports_cuda(self.device))
         gpu_name = torch.cuda.get_device_name(self.device) if _supports_cuda(self.device) else "CPU"
         print(f"[🚀] Initializing training on device: {self.device} ({gpu_name}) as {pid}")
+        full_eval_every = max(1, int(full_eval_every))
+        save_last_every = max(1, int(save_last_every))
+        plot_every = full_eval_every
+        monitor = str(monitor).strip()
+        if monitor.lower() == "map50:95":
+            monitor = "map50_95"
+        elif monitor.lower() == "map50:50":
+            monitor = "map50"
+        monitor_mode = "min" if "loss" in monitor.lower() else "max"
 
         self.save_model_summary(self, self.output_dir)
 
@@ -261,8 +301,40 @@ class BaseModel(nn.Module):
             )
 
         pin_memory = _supports_cuda(self.device)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=pin_memory, collate_fn=train_dataset.collate_fn)
-        val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, pin_memory=pin_memory, collate_fn=val_dataset.collate_fn)
+        resolved_num_workers = _resolve_num_workers(num_workers)
+        persistent_workers = bool(persistent_workers) and resolved_num_workers > 0
+
+        train_loader_kwargs = {
+            "batch_size": batch_size,
+            "shuffle": True,
+            "pin_memory": pin_memory,
+            "collate_fn": train_dataset.collate_fn,
+            "num_workers": resolved_num_workers,
+            "persistent_workers": persistent_workers,
+        }
+        val_loader_kwargs = {
+            "batch_size": batch_size,
+            "shuffle": False,
+            "pin_memory": pin_memory,
+            "collate_fn": val_dataset.collate_fn,
+            "num_workers": resolved_num_workers,
+            "persistent_workers": persistent_workers,
+        }
+        if resolved_num_workers > 0:
+            train_loader_kwargs["prefetch_factor"] = 2
+            val_loader_kwargs["prefetch_factor"] = 2
+
+        train_loader = DataLoader(train_dataset, **train_loader_kwargs)
+        val_loader = DataLoader(val_dataset, **val_loader_kwargs)
+        print(
+            f"[ℹ] DataLoader config | num_workers={resolved_num_workers} | "
+            f"pin_memory={pin_memory} | persistent_workers={persistent_workers}"
+        )
+        print(
+            f"[ℹ] Training cadence | full_eval_every={full_eval_every} | "
+            f"plot_every={plot_every} | save_last_every={save_last_every}"
+        )
+        print(f"[ℹ] Monitor | {monitor} ({monitor_mode})")
 
         # # → noise_loader conditionnel
         # noise_images = os.path.join(data_dir, "noise/images")
@@ -287,8 +359,10 @@ class BaseModel(nn.Module):
 
         eval_runner = EvalRunner(
             output_dir=self.output_dir,
-            cfg=EvalConfig(iou_thresh=0.5, fa_target=0.01, img_size=img_size)
+            cfg=EvalConfig(iou_thresh=0.5, fa_target=0.01, img_size=img_size),
+            class_index_to_name=load_class_index_to_name(data_dir),
         )
+        extra_headers = eval_runner.extra_headers()
 
         # ---------------- opti & loss --------------------
         optimizer = optim.Adam(self.parameters(), lr=lr)
@@ -303,17 +377,17 @@ class BaseModel(nn.Module):
             # ---------- Entraînement ----------
             loss_box_train = loss_cls_train = loss_dfl_train = running_train_loss = 0.0
             first_display = True
+            train_data_time = 0.0
+            train_step_time = 0.0
 
             train_pbar = tqdm(train_loader, desc=f"Epoch {epoch} 🔧 Training", unit="batch")
+            batch_wait_start = time.perf_counter()
             for imgs, targets, res_keys in train_pbar:
+                batch_ready_time = time.perf_counter()
+                train_data_time += batch_ready_time - batch_wait_start
 
-                # print('len(imgs) === ', len(imgs))
-                # print('imgs[0].shape == ', imgs[0].shape)
-                
-                if isinstance(imgs, list):
-                    imgs = [img.to(self.device) for img in imgs]
-                else:
-                    imgs = imgs.to(self.device)
+                step_start = time.perf_counter()
+                imgs = _move_imgs_to_device(imgs, self.device, non_blocking=pin_memory)
 
                 targets = _to_device(targets, self.device)
 
@@ -346,6 +420,8 @@ class BaseModel(nn.Module):
                 scaled_loss.backward()
                 scaler.step(optimizer)
                 scaler.update()
+                _device_synchronize(self.device)
+                train_step_time += time.perf_counter() - step_start
 
                 if first_display and debug:
                     plot_batch_matched_boxes(
@@ -384,6 +460,7 @@ class BaseModel(nn.Module):
                     first_display = False
 
                 train_pbar.set_postfix(loss=loss.item())
+                batch_wait_start = time.perf_counter()
 
 
             n_train_batches = max(1, len(train_loader))
@@ -395,14 +472,18 @@ class BaseModel(nn.Module):
             # ---------- Validation ----------
             self.eval()
             loss_box_val = loss_cls_val = loss_dfl_val = running_val_loss = 0.0
+            val_data_time = 0.0
+            val_step_time = 0.0
 
             val_pbar = tqdm(val_loader, desc=f"Epoch {epoch} 🧪 Validation", unit="batch")
             with torch.no_grad():
+                batch_wait_start = time.perf_counter()
                 for imgs, targets, res_keys in val_pbar:
-                    if isinstance(imgs, list):
-                        imgs = [img.to(self.device) for img in imgs]
-                    else:
-                        imgs = imgs.to(self.device)
+                    batch_ready_time = time.perf_counter()
+                    val_data_time += batch_ready_time - batch_wait_start
+
+                    step_start = time.perf_counter()
+                    imgs = _move_imgs_to_device(imgs, self.device, non_blocking=pin_memory)
     
                     targets = _to_device(targets, self.device)
                     batch = {
@@ -418,6 +499,8 @@ class BaseModel(nn.Module):
                         pred_scores = torch.cat([x.flatten(2).permute(0, 2, 1) for x in clsobj_out], dim=1)
                         pred_distri = torch.cat([x.flatten(2).permute(0, 2, 1) for x in dist_out], dim=1)
                         val_loss_batch, loss_dict_val, _ = criterion(pred_distri, pred_scores, batch, feats=feats)
+                    _device_synchronize(self.device)
+                    val_step_time += time.perf_counter() - step_start
 
                     running_val_loss += val_loss_batch.item()
                     loss_box_val += loss_dict_val[0]
@@ -425,6 +508,7 @@ class BaseModel(nn.Module):
                     loss_dfl_val += loss_dict_val[2]
 
                     val_pbar.set_postfix(val_loss=val_loss_batch.item())
+                    batch_wait_start = time.perf_counter()
 
             n_val_batches = max(1, len(val_loader))
             val_loss = running_val_loss / n_val_batches
@@ -432,10 +516,42 @@ class BaseModel(nn.Module):
             loss_cls_val /= n_val_batches
             loss_dfl_val  /= n_val_batches
 
-            # ---------- Évaluation complète via EvalRunner (chaque epoch) ----------
-            result = eval_runner.run(epoch=epoch, model=self, val_loader=val_loader)
-            # extra_values = [map50, map50_95, avg_low, avg_med, avg_high, json_path]
-            ev = result["extra_values"]
+            monitor_value = None
+            if monitor == "val_loss":
+                monitor_value = val_loss
+
+            should_run_full_eval = (
+                (epoch % full_eval_every == 0)
+                or (epoch == epochs)
+                or (monitor == "val_loss" and not hasattr(self, "_best_monitor_value"))
+            )
+            if should_run_full_eval:
+                result = eval_runner.run(epoch=epoch, model=self, val_loader=val_loader)
+                ev = result["extra_values"]
+            else:
+                ev = [None, None, float("nan"), float("nan"), float("nan"), None]
+                result = {
+                    "did_eval": False,
+                    "extra_headers": extra_headers,
+                    "extra_values": ev,
+                    "json_path": None,
+                    "full_metrics": None,
+                }
+
+            if monitor == "map50_95":
+                monitor_value = result["extra_values"][1]
+            elif monitor == "map50":
+                monitor_value = result["extra_values"][0]
+
+            if not hasattr(self, "_best_monitor_value"):
+                self._best_monitor_value = float("inf") if monitor_mode == "min" else float("-inf")
+
+            is_best_monitor = False
+            if monitor_value is not None:
+                if monitor_mode == "min":
+                    is_best_monitor = monitor_value < self._best_monitor_value
+                else:
+                    is_best_monitor = monitor_value > self._best_monitor_value
 
             print(
                 f"📉 Summary Epoch {epoch:02d} | "
@@ -444,6 +560,13 @@ class BaseModel(nn.Module):
                 f"mAP50={ev[0] if ev[0] is not None else 'NA'} | "
                 f"mAP50_95={ev[1] if ev[1] is not None else 'NA'} | "
                 f"avgRec(low/med/high)={ev[2]:.3f}/{ev[3]:.3f}/{ev[4]:.3f}"
+            )
+            print(
+                f"⏱ Epoch {epoch:02d} timings | "
+                f"train data={train_data_time / n_train_batches:.4f}s/batch | "
+                f"train step={train_step_time / n_train_batches:.4f}s/batch | "
+                f"val data={val_data_time / n_val_batches:.4f}s/batch | "
+                f"val step={val_step_time / n_val_batches:.4f}s/batch"
             )
 
             # ---------- Logging CSV (colonnes de base + extras EvalRunner) ----------
@@ -457,27 +580,21 @@ class BaseModel(nn.Module):
             )
 
             # --- CHECKPOINT & PLOTS ---
-            torch.save(self.state_dict(), last_path)
+            if (epoch % save_last_every == 0) or (epoch == epochs):
+                torch.save(self.state_dict(), last_path)
 
-            # Plots “camera-ready”
-            TrainingPlots.plot_losses(log_path, save_path=os.path.join(self.output_dir, "loss_curves.png"))
-            TrainingPlots.plot_maps(log_path,   save_path=os.path.join(self.output_dir, "map_curves.png"))
-            TrainingPlots.plot_avg_recalls(log_path, save_path=os.path.join(self.output_dir, "avg_recall_curves.png"))
+            if (epoch % plot_every == 0) or (epoch == epochs):
+                TrainingPlots.plot_losses(log_path, save_path=os.path.join(self.output_dir, "loss_curves.png"))
+                TrainingPlots.plot_maps(log_path,   save_path=os.path.join(self.output_dir, "map_curves.png"))
+                TrainingPlots.plot_avg_recalls(log_path, save_path=os.path.join(self.output_dir, "avg_recall_curves.png"))
 
-            # Best (val_loss)
-            current_map5095 = result["extra_values"][1]
-            current_map50 = result["extra_values"][0]
-            if not hasattr(self, "_best_map5095"):
-                self._best_map5095 = float("-inf")
+            if is_best_monitor:
+                self._best_monitor_value = monitor_value
+                torch.save(self.state_dict(), best_path)
+                print(f"💾 Best model ({monitor}={monitor_value:.4f}) saved.")
 
-            if current_map5095 is not None and current_map5095 > self._best_map5095:
-                self._best_map5095 = current_map5095
-                torch.save(self.state_dict(), best_path)  # ou os.path.join(self.output_dir, "best_map5095.pt")
-                print(f"💾 Best model (mAP50:95={current_map5095:.4f}) (mAP50={current_map50}) saved.")
-
-            # Early stopping sur mAP50:95 (mode='max')
-            if should_stop_early_from_csv(log_path, patience=patience, monitor="val_loss", mode="min"):
-                print(f"⛔️ Early stopping déclenché sur mAP50:95 (aucune amélioration ≥ {patience} epochs).")
+            if should_stop_early_from_csv(log_path, patience=patience, monitor=monitor, mode=monitor_mode):
+                print(f"⛔️ Early stopping déclenché sur {monitor} (aucune amélioration ≥ {patience} epochs).")
                 break
 
         print("✅ Entraînement terminé.")
@@ -494,10 +611,7 @@ class BaseModel(nn.Module):
             val_pbar = tqdm(val_loader, desc="🔍 Evaluating", unit="batch")
             for imgs, targets in val_pbar:
                 # Envoi sur device
-                if isinstance(imgs, list):
-                    imgs = [img.to(self.device) for img in imgs]
-                else:
-                    imgs = imgs.to(self.device)
+                imgs = _move_imgs_to_device(imgs, self.device)
                 targets = _to_device(targets, self.device)
 
                 # Inférence
@@ -597,10 +711,7 @@ class BaseModel(nn.Module):
 
     def predict(self, image_tensor, to_plot=False, conf_threshold=0.1, labels=None, optimal_shape=(1024,1024), iou_thres=0.1, iou_same_box = 0.9):
         self.eval()
-        if isinstance(image_tensor, list):
-            image_tensor = [img.to(self.device) for img in image_tensor]
-        else:
-            image_tensor = image_tensor.to(self.device)
+        image_tensor = _move_imgs_to_device(image_tensor, self.device)
 
         with torch.no_grad():
             dist_out, clsobj_out = self(image_tensor)

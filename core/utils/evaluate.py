@@ -27,9 +27,15 @@ class EvalRunner:
     - Résume les métriques en scalaires alignés avec les extra headers
     - Sauvegarde un JSON complet par epoch
     """
-    def __init__(self, output_dir: str, cfg: EvalConfig):
+    def __init__(
+        self,
+        output_dir: str,
+        cfg: EvalConfig,
+        class_index_to_name: Optional[Dict[int, str]] = None,
+    ):
         self.output_dir = Path(output_dir)
         self.cfg = cfg
+        self.class_index_to_name = class_index_to_name
 
     # --- Colonnes additionnelles (stables, indépendantes du run effectif) ---
     def extra_headers(self) -> List[str]:
@@ -120,6 +126,7 @@ class EvalRunner:
             img_size=self.cfg.img_size,
             to_save=False,
             to_plot=False,
+            class_index_to_name=self.class_index_to_name,
         )
 
         summary = self._summarize(full_metrics)

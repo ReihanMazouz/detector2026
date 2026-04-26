@@ -14,7 +14,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 from detector2026.core.models.yolov11 import YOLOv11
 from detector2026.core.utils.analysing_results import dataset_analysis_with_metrics
-from detector2026.core.utils.dataset import YOLODatasetSpecificRes
+from detector2026.core.utils.dataset import YOLODatasetSpecificRes, load_class_index_to_name
 from detector2026.core.utils.preprocess import preprocessing_num_channels
 
 
@@ -23,10 +23,10 @@ from detector2026.core.utils.preprocess import preprocessing_num_channels
 # =====================================================================
 
 CHECKPOINT_PATH = Path(
-    "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_512/best.pt"
+    "/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/examples_of_training/yolov11n_specificres_cfg512/best.pt"
 )
 DATASET_PATH = Path(
-    "/data/RAWSIM/RMA/rf_dataset_thesis"
+    "/Users/tailleesarah/Documents/thèse/icml/ICML2026DataSimulator/examples/output/rf_thesis_dataset"
 )
 SPLIT = "val"
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -42,7 +42,7 @@ RES_HW = (256, 256)
 ANISOTROPIC = False
 P3_SIZE = (64, 64)
 
-BATCH_SIZE = 64
+BATCH_SIZE = 1
 IOU_THRESH = 0.5
 FALSE_ALARM_TARGET = 0.01
 
@@ -113,6 +113,7 @@ def main() -> None:
         img_size=RES_HW,
         to_save=False,
         to_plot=False,
+        class_index_to_name=load_class_index_to_name(DATASET_PATH),
     )
 
     payload = {

@@ -9,7 +9,7 @@ from detector2026.core.utils.preprocess import preprocessing_num_channels
 
 def main():
     data_dir = "/data/RAWSIM/RMA/rf_dataset_thesis"
-    output_dir = "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_512"
+    output_dir = "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_cfg512"
 
     # Scenario cible:
     # - modele: YOLOv11n
@@ -28,6 +28,9 @@ def main():
     epochs = 300
     patience = 30
     lr = 1e-3
+    num_workers = None
+    full_eval_every = 5
+    save_last_every = 5
     width_mult = 0.25  # YOLOv11n
     reg_max = 16
 
@@ -36,6 +39,9 @@ def main():
     print("dataset = specificres")
     print("res_key =", res_key)
     print("res_hw =", res_hw)
+    print("num_workers =", num_workers)
+    print("full_eval_every =", full_eval_every)
+    print("save_last_every =", save_last_every)
 
     model = YOLOv11(
         output_dir=output_dir,
@@ -55,6 +61,9 @@ def main():
         dataset="specificres",
         preprocessing=preprocessing,
         select_res={"res_hw": res_hw, "res_key": res_key},
+        num_workers=num_workers,
+        full_eval_every=full_eval_every,
+        save_last_every=save_last_every,
     )
 
 

@@ -33,6 +33,10 @@ DEFAULT_PATIENCE = 20
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 1e-3
 DEFAULT_PREPROCESSING = "none"
+DEFAULT_NUM_WORKERS = None
+DEFAULT_FULL_EVAL_EVERY = 5
+DEFAULT_SAVE_LAST_EVERY = 5
+DEFAULT_MONITOR = "val_loss"
 DEFAULT_RES_KEYS = ["cfg128", "cfg256", "cfg512", "cfg1024", "cfg2048"]
 
 MR_WIDTH_MULT = {
@@ -333,7 +337,7 @@ def build_jobs(
             model_builder=build_mr("n", (input_resolutions[0], input_resolutions[4])),
         ),
         TrainingJob(
-            label="MRS-YOLO, resolutions 2 and 4",
+            label="MRS-YOLO n, resolutions 2 and 4",
             output_dir_name=output_name_for_mr("n", (res_keys[1], res_keys[3])),
             dataset=fused_dataset_2_res2_res4,
             model_builder=build_mr("n", (input_resolutions[1], input_resolutions[3])),
@@ -410,6 +414,10 @@ def run_job(
     lr: float,
     patience: int,
     preprocessing: str,
+    num_workers: int | None,
+    full_eval_every: int,
+    save_last_every: int,
+    monitor: str,
 ):
     output_dir = output_dir_parent / job.output_dir_name
     if output_dir.exists():
@@ -429,6 +437,10 @@ def run_job(
             dataset=job.dataset,
             preprocessing=preprocessing,
             select_res=job.select_res,
+            num_workers=num_workers,
+            full_eval_every=full_eval_every,
+            save_last_every=save_last_every,
+            monitor=monitor,
         )
     finally:
         del model
@@ -453,6 +465,10 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=DEFAULT_LR)
     parser.add_argument("--preprocessing", default=DEFAULT_PREPROCESSING)
+    parser.add_argument("--num-workers", type=int, default=DEFAULT_NUM_WORKERS)
+    parser.add_argument("--full-eval-every", type=int, default=DEFAULT_FULL_EVAL_EVERY)
+    parser.add_argument("--save-last-every", type=int, default=DEFAULT_SAVE_LAST_EVERY)
+    parser.add_argument("--monitor", default=DEFAULT_MONITOR)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -485,6 +501,10 @@ def main():
     print(f"Resolution centrale pour les modeles uni-res = {central_res_key}: {central_res_hw}")
     print(f"Preprocessing = {args.preprocessing}")
     print(f"Input channels = {input_channels}")
+    print(f"Num workers = {args.num_workers}")
+    print(f"Full eval every = {args.full_eval_every}")
+    print(f"Save last every = {args.save_last_every}")
+    print(f"Monitor = {args.monitor}")
 
     jobs = build_jobs(
         input_resolutions=input_resolutions,
@@ -515,6 +535,10 @@ def main():
             lr=args.lr,
             patience=args.patience,
             preprocessing=args.preprocessing,
+            num_workers=args.num_workers,
+            full_eval_every=args.full_eval_every,
+            save_last_every=args.save_last_every,
+            monitor=args.monitor,
         )
 
 

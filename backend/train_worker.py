@@ -131,6 +131,10 @@ def _fit_kwargs(config: Dict[str, Any]) -> Dict[str, Any]:
         "patience": int(training.get("patience", 30)),
         "dataset": str(training.get("dataset_mode", "fused")),
         "preprocessing": str(training.get("preprocessing", "spectrogram_psnr")),
+        "num_workers": training.get("num_workers"),
+        "full_eval_every": int(training.get("full_eval_every", 1)),
+        "save_last_every": int(training.get("save_last_every", 1)),
+        "monitor": str(training.get("monitor", "val_loss")),
     }
     if isinstance(training.get("preprocessing_kwargs"), dict):
         kwargs["preprocessing_kwargs"] = dict(training["preprocessing_kwargs"])

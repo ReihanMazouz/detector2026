@@ -19,12 +19,16 @@ def ensure_single_spectrum_2d(tensor: torch.Tensor) -> torch.Tensor:
     )
 
 
-def ensure_chw_float(tensor: torch.Tensor) -> torch.Tensor:
+def ensure_chw(tensor: torch.Tensor) -> torch.Tensor:
     if tensor.ndim == 2:
-        return tensor.unsqueeze(0).to(torch.float32)
+        return tensor.unsqueeze(0)
     if tensor.ndim == 3:
-        return tensor.to(torch.float32)
+        return tensor
     raise ValueError(f"Expected a 2D or 3D tensor, got shape {tuple(tensor.shape)}")
+
+
+def ensure_chw_float(tensor: torch.Tensor) -> torch.Tensor:
+    return ensure_chw(tensor).to(torch.float32)
 
 
 def minmax_scale(values: torch.Tensor) -> torch.Tensor:

@@ -4,7 +4,7 @@ from typing import Any, Callable
 
 import torch
 
-from ._common import ensure_chw_float
+from ._common import ensure_chw, ensure_chw_float
 from .complex_spectrum import preprocess_complex_amplitude_phase, preprocess_complex_real_imag
 from .spectrogram import preprocess_spectrogram_minmax, preprocess_spectrogram_psnr
 
@@ -56,7 +56,7 @@ def build_preprocessor(
     kwargs = dict(preprocessing_kwargs or {})
 
     if resolved == "none":
-        return lambda tensor, **_: ensure_chw_float(tensor)
+        return lambda tensor, **_: ensure_chw(tensor)
     if resolved == "spectrogram_psnr":
         return lambda tensor, **extra: preprocess_spectrogram_psnr(tensor, **kwargs, **extra)
     if resolved == "spectrogram_minmax":

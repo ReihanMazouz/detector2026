@@ -44,10 +44,16 @@ def find_input_resolutions(data_dir: str, split: str = "train") -> List[Tuple[in
 
 def main():
     preprocessing = "spectrogram_psnr"
+    num_workers = None
+    full_eval_every = 5
+    save_last_every = 5
     input_channels = preprocessing_num_channels(preprocessing)
     input_res = find_input_resolutions("/data/RAWSIM/RMA/rf_dataset_thesis")
     # input_res = [(256,256)]
     print('input_res == ', input_res)
+    print('num_workers == ', num_workers)
+    print('full_eval_every == ', full_eval_every)
+    print('save_last_every == ', save_last_every)
     device = 'cuda:0'
     model = MR_YOLO(
         num_classes=20, device=device, reg_max=16,
@@ -75,6 +81,9 @@ def main():
         preprocessing=preprocessing,
         epochs=300, 
         patience=30,
+        num_workers=num_workers,
+        full_eval_every=full_eval_every,
+        save_last_every=save_last_every,
     )
 
 if __name__ == "__main__":
