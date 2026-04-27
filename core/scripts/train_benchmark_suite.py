@@ -52,6 +52,7 @@ YOLO11_WIDTH_MULT = {
     "m": 0.75,
 }
 YOLOV8_SCALE = {
+    "n": {"width_mult": 0.25},
     "s": {"width_mult": 0.50},
     "m": {"width_mult": 0.75},
 }
