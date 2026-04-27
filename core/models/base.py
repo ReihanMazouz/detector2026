@@ -68,6 +68,77 @@ def _resolve_num_workers(num_workers):
     return min(4, cpu_count - 1)
 
 
+def _as_hw(value):
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return (value, value)
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return (int(value[0]), int(value[1]))
+    return None
+
+
+def _max_hw(resolutions):
+    if not resolutions:
+        return None
+    hw = [_as_hw(res) for res in resolutions]
+    hw = [res for res in hw if res is not None]
+    if not hw:
+        return None
+    return (max(h for h, _ in hw), max(w for _, w in hw))
+
+
+def _tensor_hw(tensor):
+    if not torch.is_tensor(tensor) or tensor.ndim < 2:
+        return None
+    return (int(tensor.shape[-2]), int(tensor.shape[-1]))
+
+
+def _sample_img_size(sample):
+    if isinstance(sample, dict):
+        for key in ("imgs", "specs", "img"):
+            if key in sample:
+                return _sample_img_size(sample[key])
+        return None
+
+    if torch.is_tensor(sample):
+        return _tensor_hw(sample)
+
+    if isinstance(sample, (list, tuple)):
+        tensor_shapes = [_tensor_hw(item) for item in sample]
+        tensor_shapes = [shape for shape in tensor_shapes if shape is not None]
+        if tensor_shapes:
+            return _max_hw(tensor_shapes)
+
+    return None
+
+
+def _resolve_eval_img_size(model, dataset, fallback=None):
+    if hasattr(model, "input_resolutions"):
+        img_size = _max_hw(getattr(model, "input_resolutions"))
+        if img_size is not None:
+            return img_size
+
+    if hasattr(dataset, "res_hw"):
+        img_size = _as_hw(getattr(dataset, "res_hw"))
+        if img_size is not None:
+            return img_size
+
+    if hasattr(dataset, "target_len"):
+        target_len = int(getattr(dataset, "target_len"))
+        return (target_len, target_len)
+
+    try:
+        if len(dataset) > 0:
+            img_size = _sample_img_size(dataset[0])
+            if img_size is not None:
+                return img_size
+    except Exception:
+        pass
+
+    return _as_hw(fallback) or (1024, 1024)
+
+
 class _NoOpGradScaler:
     def scale(self, loss):
         return loss
@@ -237,7 +308,7 @@ class BaseModel(nn.Module):
         else:
             YOLODataset = dataset_name
 
-        img_size = (1024,1024)
+        img_size = None
 
         for split in ("train", "val"):
             self._check_dataset_dirs(data_dir, split, dataset_name)
@@ -263,7 +334,6 @@ class BaseModel(nn.Module):
             # expected: select_res = { "res_hw": (H, W), "res_key": "cfgXXX" }
             res_hw  = select_res.get("res_hw", None)
             res_key = select_res.get("res_key", None)
-            img_size = res_hw
 
             if res_hw is None or res_key is None:
                 raise ValueError("select_res must contain 'res_hw' and 'res_key'.")
@@ -300,6 +370,8 @@ class BaseModel(nn.Module):
                 preprocessing_kwargs=preprocessing_kwargs,
             )
 
+        img_size = _resolve_eval_img_size(self, val_dataset, fallback=img_size)
+
         pin_memory = _supports_cuda(self.device)
         resolved_num_workers = _resolve_num_workers(num_workers)
         persistent_workers = bool(persistent_workers) and resolved_num_workers > 0
@@ -334,6 +406,7 @@ class BaseModel(nn.Module):
             f"[ℹ] Training cadence | full_eval_every={full_eval_every} | "
             f"plot_every={plot_every} | save_last_every={save_last_every}"
         )
+        print(f"[ℹ] Eval image size | {img_size}")
         print(f"[ℹ] Monitor | {monitor} ({monitor_mode})")
 
         # # → noise_loader conditionnel
