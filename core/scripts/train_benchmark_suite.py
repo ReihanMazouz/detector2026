@@ -23,13 +23,13 @@ from detector2026.core.utils.preprocess import build_preprocessor, preprocessing
 
 Resolution = Tuple[int, int]
 
-DEFAULT_DATA_DIR = "/data/RAWSIM/RMA/rf_dataset_thesis"
-DEFAULT_OUTPUT_DIR_PARENT = "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis"
-DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
+DEFAULT_DATA_DIR = "/data/RAWSIM/RMA/rf_dataset_for_real_validation"
+DEFAULT_OUTPUT_DIR_PARENT = "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation"
+DEFAULT_DEVICE = "cuda:0"
 DEFAULT_NUM_CLASSES = 20
 DEFAULT_REG_MAX = 16
 DEFAULT_EPOCHS = 100
-DEFAULT_PATIENCE = 20
+DEFAULT_PATIENCE = 10
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 1e-3
 DEFAULT_PREPROCESSING = "none"
@@ -37,7 +37,7 @@ DEFAULT_NUM_WORKERS = None
 DEFAULT_FULL_EVAL_EVERY = 5
 DEFAULT_SAVE_LAST_EVERY = 5
 DEFAULT_MONITOR = "val_loss"
-DEFAULT_RES_KEYS = ["cfg128", "cfg256", "cfg512", "cfg1024", "cfg2048"]
+DEFAULT_RES_KEYS = ["cfg512", "cfg256", "cfg128", "cfg1024", "cfg2048"]
 
 MR_WIDTH_MULT = {
     "n": 0.25,
@@ -248,11 +248,25 @@ def build_jobs(
     central_res_key: str,
     central_res_hw: Resolution,
 ) -> List[TrainingJob]:
-    fused_dataset_5 = make_fused_subset_dataset(range(5), res_keys)
-    fused_dataset_3_center = make_fused_subset_dataset((1, 2, 3), (res_keys[1], res_keys[2], res_keys[3]))
-    fused_dataset_3_far_center = make_fused_subset_dataset((0, 2, 4), (res_keys[0], res_keys[2], res_keys[4]))
-    fused_dataset_2_outer = make_fused_subset_dataset((0, 4), (res_keys[0], res_keys[4]))
-    fused_dataset_2_res2_res4 = make_fused_subset_dataset((1, 3), (res_keys[1], res_keys[3]))
+    if len(input_resolutions) != len(res_keys):
+        raise ValueError(
+            f"Mismatch between resolutions ({len(input_resolutions)}) and res_keys ({len(res_keys)})."
+        )
+
+    res_key_to_hw = dict(zip(res_keys, input_resolutions))
+    res_key_to_index = {res_key: index for index, res_key in enumerate(res_keys)}
+
+    def make_mr_subset(
+        selected_res_keys: Sequence[str],
+    ) -> tuple[type[Dataset], tuple[str, ...], tuple[Resolution, ...]]:
+        missing = [res_key for res_key in selected_res_keys if res_key not in res_key_to_index]
+        if missing:
+            raise ValueError(f"Unknown resolution keys requested for MR subset: {missing}")
+
+        indices = tuple(res_key_to_index[res_key] for res_key in selected_res_keys)
+        dataset_cls = make_fused_subset_dataset(indices, selected_res_keys)
+        selected_resolutions = tuple(res_key_to_hw[res_key] for res_key in selected_res_keys)
+        return dataset_cls, tuple(selected_res_keys), selected_resolutions
 
     def build_mr(scale: str, selected_resolutions: Sequence[Resolution]) -> Callable[[str], torch.nn.Module]:
         return lambda output_dir: MR_YOLO(
@@ -297,13 +311,26 @@ def build_jobs(
             width_mult=YOLOV8_SCALE[scale]["width_mult"],
         )
 
+    mr_subset_specs = [
+        ("MR-YOLO n, all resolutions", tuple(res_keys)),
+        ("MR-YOLO n, resolutions 256-512-1024", ("cfg256", "cfg512", "cfg1024")),
+        ("MR-YOLO n, resolutions 128-512-2048", ("cfg128", "cfg512", "cfg2048")),
+        ("MR-YOLO n, resolutions 256-1024", ("cfg256", "cfg1024")),
+    ]
+
+    mr_jobs = []
+    for label, selected_res_keys in mr_subset_specs:
+        dataset_cls, output_res_keys, selected_resolutions = make_mr_subset(selected_res_keys)
+        mr_jobs.append(
+            TrainingJob(
+                label=label,
+                output_dir_name=output_name_for_mr("n", output_res_keys),
+                dataset=dataset_cls,
+                model_builder=build_mr("n", selected_resolutions),
+            )
+        )
+
     return [
-        TrainingJob(
-            label="MR-YOLO n, 5 resolutions",
-            output_dir_name=output_name_for_mr("n", res_keys),
-            dataset=fused_dataset_5,
-            model_builder=build_mr("n", input_resolutions),
-        ),
         TrainingJob(
             label="YOLOv11n, central resolution",
             output_dir_name=output_name_for_yolov11("n", central_res_key),
@@ -318,29 +345,13 @@ def build_jobs(
             model_builder=build_tf_attn("n"),
             select_res={"res_hw": central_res_hw, "res_key": central_res_key},
         ),
+        *mr_jobs,
         TrainingJob(
-            label="MR-YOLO n, 3 central resolutions",
-            output_dir_name=output_name_for_mr("n", (res_keys[1], res_keys[2], res_keys[3])),
-            dataset=fused_dataset_3_center,
-            model_builder=build_mr("n", (input_resolutions[1], input_resolutions[2], input_resolutions[3])),
-        ),
-        TrainingJob(
-            label="MR-YOLO n, resolutions 1-3-5",
-            output_dir_name=output_name_for_mr("n", (res_keys[0], res_keys[2], res_keys[4])),
-            dataset=fused_dataset_3_far_center,
-            model_builder=build_mr("n", (input_resolutions[0], input_resolutions[2], input_resolutions[4])),
-        ),
-        TrainingJob(
-            label="MR-YOLO n, 2 outer resolutions",
-            output_dir_name=output_name_for_mr("n", (res_keys[0], res_keys[4])),
-            dataset=fused_dataset_2_outer,
-            model_builder=build_mr("n", (input_resolutions[0], input_resolutions[4])),
-        ),
-        TrainingJob(
-            label="MRS-YOLO n, resolutions 2 and 4",
-            output_dir_name=output_name_for_mr("n", (res_keys[1], res_keys[3])),
-            dataset=fused_dataset_2_res2_res4,
-            model_builder=build_mr("n", (input_resolutions[1], input_resolutions[3])),
+            label="YOLOv8n, central resolution",
+            output_dir_name=output_name_for_yolov8("n", central_res_key),
+            dataset="specificres",
+            model_builder=build_yolov8("n"),
+            select_res={"res_hw": central_res_hw, "res_key": central_res_key},
         ),
         TrainingJob(
             label="YOLOv11s, central resolution",
@@ -364,12 +375,6 @@ def build_jobs(
             select_res={"res_hw": central_res_hw, "res_key": central_res_key},
         ),
         TrainingJob(
-            label="MR-YOLOs, 5 resolutions",
-            output_dir_name=output_name_for_mr("s", res_keys),
-            dataset=fused_dataset_5,
-            model_builder=build_mr("s", input_resolutions),
-        ),
-        TrainingJob(
             label="YOLOv11m, central resolution",
             output_dir_name=output_name_for_yolov11("m", central_res_key),
             dataset="specificres",
@@ -389,12 +394,6 @@ def build_jobs(
             dataset="specificres",
             model_builder=build_yolov8("m"),
             select_res={"res_hw": central_res_hw, "res_key": central_res_key},
-        ),
-        TrainingJob(
-            label="MR-YOLOm, 5 resolutions",
-            output_dir_name=output_name_for_mr("m", res_keys),
-            dataset=fused_dataset_5,
-            model_builder=build_mr("m", input_resolutions),
         ),
     ]
 
@@ -490,7 +489,7 @@ def main():
         )
 
     res_keys = list(DEFAULT_RES_KEYS)
-    central_index = len(input_resolutions) // 2
+    central_index = 0
     central_res_key = res_keys[central_index]
     central_res_hw = input_resolutions[central_index]
     input_channels = preprocessing_num_channels(args.preprocessing)
