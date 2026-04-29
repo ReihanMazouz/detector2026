@@ -50,11 +50,13 @@ YOLO11_WIDTH_MULT = {
     "n": 0.25,
     "s": 0.50,
     "m": 0.75,
+    "l": 1.00,
 }
 YOLOV8_SCALE = {
-    "n": {"width_mult": 0.25},
-    "s": {"width_mult": 0.50},
-    "m": {"width_mult": 0.75},
+    "n": {"width_mult": 0.25, "depth_mult": 0.33},
+    "s": {"width_mult": 0.50, "depth_mult": 0.33},
+    "m": {"width_mult": 0.75, "depth_mult": 0.67},
+    "l": {"width_mult": 1.00, "depth_mult": 1.00},
 }
 MR_BACKBONE_MODE = "TFSep_pyramid"
 MR_OUTFUSION_CHANNELS_MULT = 1
@@ -310,6 +312,7 @@ def build_jobs(
             device=device,
             in_ch=input_channels,
             width_mult=YOLOV8_SCALE[scale]["width_mult"],
+            depth_mult=YOLOV8_SCALE[scale]["depth_mult"],
         )
 
     mr_subset_specs = [
@@ -330,6 +333,16 @@ def build_jobs(
                 model_builder=build_mr("n", selected_resolutions),
             )
         )
+
+    all_res_dataset_cls, all_res_output_keys, all_resolutions = make_mr_subset(tuple(res_keys))
+    mr_jobs.append(
+        TrainingJob(
+            label="MR-YOLO s, all resolutions",
+            output_dir_name=output_name_for_mr("s", all_res_output_keys),
+            dataset=all_res_dataset_cls,
+            model_builder=build_mr("s", all_resolutions),
+        )
+    )
 
     return [
         TrainingJob(
@@ -394,6 +407,27 @@ def build_jobs(
             output_dir_name=output_name_for_yolov8("m", central_res_key),
             dataset="specificres",
             model_builder=build_yolov8("m"),
+            select_res={"res_hw": central_res_hw, "res_key": central_res_key},
+        ),
+        TrainingJob(
+            label="YOLOv11l, central resolution",
+            output_dir_name=output_name_for_yolov11("l", central_res_key),
+            dataset="specificres",
+            model_builder=build_yolo11("l"),
+            select_res={"res_hw": central_res_hw, "res_key": central_res_key},
+        ),
+        TrainingJob(
+            label="TF-Attn-YOLOl, central resolution",
+            output_dir_name=output_name_for_tf_attn("l", central_res_key),
+            dataset="specificres",
+            model_builder=build_tf_attn("l"),
+            select_res={"res_hw": central_res_hw, "res_key": central_res_key},
+        ),
+        TrainingJob(
+            label="YOLOv8l, central resolution",
+            output_dir_name=output_name_for_yolov8("l", central_res_key),
+            dataset="specificres",
+            model_builder=build_yolov8("l"),
             select_res={"res_hw": central_res_hw, "res_key": central_res_key},
         ),
     ]
