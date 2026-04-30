@@ -344,6 +344,18 @@ def build_jobs(
         )
     )
 
+    yolov11s_extra_res_jobs = [
+        TrainingJob(
+            label=f"YOLOv11s, resolution {res_key}",
+            output_dir_name=output_name_for_yolov11("s", res_key),
+            dataset="specificres",
+            model_builder=build_yolo11("s"),
+            select_res={"res_hw": res_key_to_hw[res_key], "res_key": res_key},
+        )
+        for res_key in res_keys
+        if res_key != central_res_key
+    ]
+
     return [
         TrainingJob(
             label="YOLOv11n, central resolution",
@@ -374,6 +386,7 @@ def build_jobs(
             model_builder=build_yolo11("s"),
             select_res={"res_hw": central_res_hw, "res_key": central_res_key},
         ),
+        *yolov11s_extra_res_jobs,
         TrainingJob(
             label="TF-Attn-YOLOs, central resolution",
             output_dir_name=output_name_for_tf_attn("s", central_res_key),
