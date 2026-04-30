@@ -21,6 +21,29 @@ DEFAULT_RES_HW = {
     "cfg2048": (1024, 64),
 }
 
+DEFAULT_CLASS_INDEX_TO_NAME = {
+    0: "no_mod",
+    1: "LFM",
+    2: "NLFM",
+    3: "QFM",
+    4: "FMCW_TRI",
+    5: "barker_biphasique",
+    6: "random_biphasique",
+    7: "FSK",
+    8: "P1",
+    9: "P2",
+    10: "P3",
+    11: "P4",
+    12: "frank",
+    13: "T1",
+    14: "T2",
+    15: "T3",
+    16: "T4",
+    17: "OFDM",
+    18: "FHSS",
+    19: "DSSS",
+}
+
 
 YOLO11_WIDTH_MULT = {"n": 0.25, "s": 0.50, "m": 1.00}
 MR_WIDTH_MULT = {"n": 0.25, "s": 0.50, "m": 1.00}
@@ -54,6 +77,7 @@ class DeepModelSpec:
     iou_same_box: float = 0.9
     backbone_mode: str = "F"
     outfusion_channels_mult: int = 1
+    class_index_to_name_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +238,154 @@ def _preprocessing_num_channels(name: str) -> int:
     raise ValueError("Deep waveform evaluation currently supports one-channel spectrogram preprocessing only.")
 
 
+def _load_class_index_to_name_file(path: Path) -> dict[int, str]:
+    if not path.is_file():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return {}
+    mapping = {}
+    for key, value in raw.items():
+        try:
+            mapping[int(key)] = str(value)
+        except (TypeError, ValueError):
+            continue
+    return mapping
+
+
+def _resolve_class_index_to_name(spec: DeepModelSpec) -> dict[int, str]:
+    if spec.class_index_to_name_path is not None:
+        mapping = _load_class_index_to_name_file(Path(spec.class_index_to_name_path))
+        if mapping:
+            return mapping
+
+    run_dir = spec.weights_path.parent
+    mapping = _load_class_index_to_name_file(run_dir / "class_index_to_name.json")
+    if mapping:
+        return mapping
+
+    config_path = run_dir / "config.json"
+    if config_path.is_file():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            config = {}
+        embedded_mapping = config.get("class_index_to_name")
+        if isinstance(embedded_mapping, dict):
+            mapping = {}
+            for key, value in embedded_mapping.items():
+                try:
+                    mapping[int(key)] = str(value)
+                except (TypeError, ValueError):
+                    continue
+            if mapping:
+                return mapping
+
+        dataset_path = config.get("dataset_path") or config.get("data_dir")
+        if dataset_path:
+            mapping = _load_class_index_to_name_file(Path(dataset_path) / "class_index_to_name.json")
+            if mapping:
+                return mapping
+
+    return dict(DEFAULT_CLASS_INDEX_TO_NAME)
+
+
+def _scenario_gt_box_xyxy(scenario: Any) -> tuple[float, float, float, float]:
+    signal = np.asarray(scenario.signal).reshape(-1)
+    nonzero = np.flatnonzero(np.abs(signal) > 0)
+    if nonzero.size:
+        x1 = float(nonzero[0]) / max(float(signal.size), 1.0)
+        x2 = float(nonzero[-1] + 1) / max(float(signal.size), 1.0)
+    else:
+        duration = max(int(getattr(scenario, "duration_samples", 0)), 1)
+        x1 = 0.0
+        x2 = min(float(duration) / max(float(signal.size), 1.0), 1.0)
+
+    pulse = getattr(scenario, "pulse", {}) or {}
+    fp = float(pulse.get("fp", 0.5 * (F_E / 2.0)))
+    bandwidth = max(float(pulse.get("bandwidth", 0.0)), 0.0)
+    nyquist = F_E / 2.0
+    y1 = (fp - 0.5 * bandwidth) / nyquist
+    y2 = (fp + 0.5 * bandwidth) / nyquist
+    return (
+        float(np.clip(x1, 0.0, 1.0)),
+        float(np.clip(min(max(x2, x1), 1.0), 0.0, 1.0)),
+        float(np.clip(y1, 0.0, 1.0)),
+        float(np.clip(max(y2, y1), 0.0, 1.0)),
+    )
+
+
+def _box_iou_xyxy(box_a: Sequence[float], box_b: Sequence[float]) -> float:
+    ax1, ay1, ax2, ay2 = map(float, box_a)
+    bx1, by1, bx2, by2 = map(float, box_b)
+    inter_w = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+    inter_h = max(0.0, min(ay2, by2) - max(ay1, by1))
+    inter = inter_w * inter_h
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return float(inter / union) if union > 0.0 else 0.0
+
+
+def _box_error_metrics(pred_box: Sequence[float], gt_box: Sequence[float]) -> dict[str, float]:
+    px1, py1, px2, py2 = map(float, pred_box)
+    gx1, gy1, gx2, gy2 = map(float, gt_box)
+    pred_cx = 0.5 * (px1 + px2)
+    pred_cy = 0.5 * (py1 + py2)
+    pred_w = max(0.0, px2 - px1)
+    pred_h = max(0.0, py2 - py1)
+    gt_cx = 0.5 * (gx1 + gx2)
+    gt_cy = 0.5 * (gy1 + gy2)
+    gt_w = max(0.0, gx2 - gx1)
+    gt_h = max(0.0, gy2 - gy1)
+    return {
+        "center_x_abs_error": abs(pred_cx - gt_cx),
+        "center_y_abs_error": abs(pred_cy - gt_cy),
+        "width_abs_error": abs(pred_w - gt_w),
+        "height_abs_error": abs(pred_h - gt_h),
+        "center_l2_error": float(math.hypot(pred_cx - gt_cx, pred_cy - gt_cy)),
+        "size_l2_error": float(math.hypot(pred_w - gt_w, pred_h - gt_h)),
+        "iou": _box_iou_xyxy(pred_box, gt_box),
+    }
+
+
+def _nanmean(values: Sequence[float]) -> float | None:
+    finite = [float(value) for value in values if np.isfinite(float(value))]
+    return float(np.mean(finite)) if finite else None
+
+
+def _summarize_quality(rows: list[dict], x_key: str) -> list[dict]:
+    grouped: dict[tuple[str, float], list[dict]] = defaultdict(list)
+    for row in rows:
+        grouped[(str(row["waveform_label"]), float(row[x_key]))].append(row)
+
+    summary = []
+    for (waveform_label, x_value), items in sorted(grouped.items()):
+        detected = [item for item in items if bool(item["decision"])]
+        class_values = [
+            1.0 if bool(item["classification_correct"]) else 0.0
+            for item in detected
+            if item.get("classification_correct") is not None
+        ]
+        summary.append(
+            {
+                "waveform_label": waveform_label,
+                x_key: x_value,
+                "classification_accuracy_on_detected": _nanmean(class_values),
+                "mean_center_x_abs_error_on_detected": _nanmean([item["center_x_abs_error"] for item in detected]),
+                "mean_center_y_abs_error_on_detected": _nanmean([item["center_y_abs_error"] for item in detected]),
+                "mean_width_abs_error_on_detected": _nanmean([item["width_abs_error"] for item in detected]),
+                "mean_height_abs_error_on_detected": _nanmean([item["height_abs_error"] for item in detected]),
+                "mean_center_l2_error_on_detected": _nanmean([item["center_l2_error"] for item in detected]),
+                "mean_size_l2_error_on_detected": _nanmean([item["size_l2_error"] for item in detected]),
+                "mean_iou_on_detected": _nanmean([item["iou"] for item in detected]),
+                "n_detected": int(len(detected)),
+                "n_samples": int(len(items)),
+            }
+        )
+    return summary
+
+
 class _DeepDetector:
     def __init__(self, spec: DeepModelSpec, *, device: str) -> None:
         self.spec = spec
@@ -257,6 +429,7 @@ class _DeepDetector:
             raise FileNotFoundError(f"Missing weights for {spec.name}: {spec.weights_path}")
         self.model.load_weights(str(spec.weights_path), device=str(self.device), eval_mode=True)
         self.model.eval()
+        self.class_index_to_name = _resolve_class_index_to_name(spec)
 
     def _make_inputs(self, signal: np.ndarray) -> torch.Tensor | list[torch.Tensor]:
         images = []
@@ -267,6 +440,12 @@ class _DeepDetector:
         return images[0] if len(images) == 1 else images
 
     def statistic(self, signal: np.ndarray) -> float:
+        detections = self.detections(signal, conf_thres=self.spec.conf_floor)
+        if detections.size == 0:
+            return 0.0
+        return float(np.max(detections[:, 4]))
+
+    def detections(self, signal: np.ndarray, *, conf_thres: float) -> np.ndarray:
         inputs = self._make_inputs(signal)
         with torch.no_grad():
             dist_out, cls_out = self.model(inputs)
@@ -274,14 +453,55 @@ class _DeepDetector:
                 dist_out,
                 cls_out,
                 dist_out,
-                conf_thres=self.spec.conf_floor,
+                conf_thres=float(conf_thres),
                 iou_thres=self.spec.iou_thres,
                 iou_same_box=self.spec.iou_same_box,
             )
         detections = processed[0] if processed else None
         if detections is None or len(detections) == 0:
-            return 0.0
-        return float(detections[:, 4].detach().max().cpu())
+            return np.zeros((0, 6), dtype=np.float64)
+        return detections.detach().cpu().to(torch.float64).numpy()
+
+    def evaluate_signal(self, signal: np.ndarray, *, threshold: float, scenario: Any) -> dict[str, Any]:
+        detections = self.detections(signal, conf_thres=threshold)
+        if detections.size == 0:
+            return {
+                "decision": False,
+                "score": 0.0,
+                "classification_correct": None,
+                "center_x_abs_error": float("nan"),
+                "center_y_abs_error": float("nan"),
+                "width_abs_error": float("nan"),
+                "height_abs_error": float("nan"),
+                "center_l2_error": float("nan"),
+                "size_l2_error": float("nan"),
+                "iou": float("nan"),
+            }
+
+        best = detections[int(np.argmax(detections[:, 4]))]
+        res_key = self.input_res_keys[0]
+        height, width = DEFAULT_RES_HW[res_key]
+        pred_box = (
+            float(np.clip(best[0] / float(width), 0.0, 1.0)),
+            float(np.clip(best[1] / float(height), 0.0, 1.0)),
+            float(np.clip(best[2] / float(width), 0.0, 1.0)),
+            float(np.clip(best[3] / float(height), 0.0, 1.0)),
+        )
+        gt_x1, gt_x2, gt_y1, gt_y2 = _scenario_gt_box_xyxy(scenario)
+        gt_box = (gt_x1, gt_y1, gt_x2, gt_y2)
+        errors = _box_error_metrics(pred_box, gt_box)
+        pred_class = int(best[5])
+        expected_names = {str(getattr(scenario, "class_name", "")), str(getattr(scenario, "waveform_label", ""))}
+        expected_names.discard("")
+        pred_name = self.class_index_to_name.get(pred_class, str(pred_class))
+        return {
+            "decision": True,
+            "score": float(best[4]),
+            "pred_class": pred_class,
+            "pred_class_name": pred_name,
+            "classification_correct": pred_name in expected_names,
+            **errors,
+        }
 
 
 def _calibrate(detector: _DeepDetector, *, signal_length: int, noise_variance: float, pfa: float, n_trials: int, seed: int) -> dict:
@@ -368,6 +588,7 @@ def run_deep_waveform_snr_sweep(config: DeepWaveformSweepConfig) -> Dict[str, An
             f"[deep:{spec.name}] threshold={threshold:.6g}, empirical_pfa={calibration['empirical_pfa']:.6g}",
         )
         by_snr = []
+        quality_rows = []
         grouped_scenarios = _group_scenarios_by_waveform(scenarios)
 
         _log(config, f"[deep:{spec.name}] sweep Pd vs SNR")
@@ -383,14 +604,26 @@ def run_deep_waveform_snr_sweep(config: DeepWaveformSweepConfig) -> Dict[str, An
                         snr_db=float(snr_db),
                         duration_samples=int(scenario.duration_samples),
                     )
-                    statistic = detector.statistic(scale * scenario.signal + noise)
-                    decisions.append(bool(statistic > threshold))
+                    sample_eval = detector.evaluate_signal(
+                        scale * scenario.signal + noise,
+                        threshold=threshold,
+                        scenario=scenario,
+                    )
+                    decisions.append(bool(sample_eval["decision"]))
+                    quality_rows.append(
+                        {
+                            "waveform_label": waveform_label,
+                            "snr_db": float(snr_db),
+                            **sample_eval,
+                        }
+                    )
                 pd = float(np.mean(np.asarray(decisions, dtype=np.float64)))
                 by_snr.append(
                     {
                         "waveform_label": waveform_label,
                         "snr_db": float(snr_db),
                         "pd": pd,
+                        "pd_presence": pd,
                         "n_samples": int(len(decisions)),
                         "early_stopped": bool(pd == 0.0),
                     }
@@ -403,8 +636,12 @@ def run_deep_waveform_snr_sweep(config: DeepWaveformSweepConfig) -> Dict[str, An
         payload["detectors"][spec.name] = {
             "family": spec.family,
             "weights_path": str(spec.weights_path),
+            "class_index_to_name": {str(key): value for key, value in detector.class_index_to_name.items()},
             "threshold": calibration,
             "by_snr": by_snr,
+            "by_characterization": _summarize_quality(quality_rows, "snr_db"),
+            "pd_definition": "presence of at least one postprocessed bounding box with confidence above the calibrated Pfa threshold; IoU is not used for Pd",
+            "characterization_definition": "classification and normalized bbox errors are computed separately on detected samples using the highest-confidence box",
         }
         _log(config, f"[deep:{spec.name}] done")
 
