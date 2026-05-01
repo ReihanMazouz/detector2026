@@ -22,23 +22,23 @@ from baselines.classical_detectors.evaluation.deep_waveform_sweep import (
 # Configuration a modifier ici
 # =============================================================================
 
-DATASET_ROOT = Path("/Users/tailleesarah/Documents/thèse/icml/ICML2026DataSimulator/tmp/output/rf_single_emitter_real_smoketest_5x5")
-OUTPUT_JSON = PROJECT_ROOT / "runs" / "baselines" / "dataset_evaluation.json"
-PROGRESS_LOG = PROJECT_ROOT / "runs" / "baselines" / "dataset_evaluation_progress.log"
+DATASET_ROOT = Path("/data/RAWSIM/RMA/rf_single_emitter_real_validation")
+OUTPUT_JSON = Path("/data/RAWSIM/RMA/training_folder/baselines_evaluation") / "dataset_evaluation.json"
+PROGRESS_LOG = Path('/data/RAWSIM/RMA/training_folder/baselines_evaluation') / "dataset_evaluation_progress.log"
 PLOT_CURVES = True
 
 RUN_CLASSICAL_BASELINES = True
 RUN_YOLOV11 = True
 RUN_MR_YOLO = False
 
-YOLOV11_WEIGHTS = Path("/Users/tailleesarah/Documents/thèse/icml/real_data_validation_minimal/weights/yolov11n_cfg512_best.pt")
-MR_YOLO_WEIGHTS = Path("/Users/tailleesarah/Documents/thèse/icml/real_data_validation_minimal/weights/mr_yolovn_best.pt")
+YOLOV11_WEIGHTS = Path("/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/mr_yolo_n_fused_cfg512_cfg256_cfg128_cfg1024_cfg2048/best.pt")
+MR_YOLO_WEIGHTS = Path("/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/yolov11n_specificres_cfg512/best.pt")
 
 PFA = 1e-2
 SEED = 444
 NOISE_VARIANCE = 1.0
-NOISE_TRIALS_CLASSICAL = 500
-NOISE_TRIALS_DEEP = 500
+NOISE_TRIALS_CLASSICAL = 1000
+NOISE_TRIALS_DEEP = 1000
 DEEP_BATCH_SIZE = 64
 SNR_VALUES_DB = tuple(range(-20, 61, 2))
 WAVEFORMS: tuple[str, ...] = ()
