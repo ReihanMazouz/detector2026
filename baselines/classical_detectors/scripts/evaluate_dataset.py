@@ -51,7 +51,8 @@ YOLOV11_SCALE = "n"
 YOLOV11_RES_KEY = "cfg512"
 
 MR_YOLO_SCALE = "n"
-MR_YOLO_RES_KEYS = ("cfg128", "cfg256", "cfg512", "cfg1024", "cfg2048")
+MR_YOLO_RES_KEYS = ("cfg512", "cfg256", "cfg128", "cfg1024", "cfg2048")
+MR_YOLO_BACKBONE_MODE = "TFSep_pyramid"
 
 
 def _json_default(obj: Any) -> Any:
@@ -91,6 +92,7 @@ def _build_deep_specs() -> list[DeepModelSpec]:
                 weights_path=MR_YOLO_WEIGHTS.resolve(),
                 scale=MR_YOLO_SCALE,
                 res_keys=MR_YOLO_RES_KEYS,
+                backbone_mode=MR_YOLO_BACKBONE_MODE,
                 preprocessing=PREPROCESSING,
                 num_classes=NUM_CLASSES,
             )

@@ -46,8 +46,8 @@ DEFAULT_CLASS_INDEX_TO_NAME = {
 }
 
 
-YOLO11_WIDTH_MULT = {"n": 0.25, "s": 0.50, "m": 1.00}
-MR_WIDTH_MULT = {"n": 0.25, "s": 0.50, "m": 1.00}
+YOLO11_WIDTH_MULT = {"n": 0.25, "s": 0.50, "m": 0.75, "l": 1.00}
+MR_WIDTH_MULT = {"n": 0.25, "s": 0.50, "m": 0.75}
 
 F_E = 4.0e9
 K_BOLTZMANN = 1.38e-23
@@ -69,14 +69,14 @@ class DeepModelSpec:
     weights_path: Path
     scale: str = "n"
     res_key: str = "cfg512"
-    res_keys: tuple[str, ...] = ("cfg128", "cfg256", "cfg512", "cfg1024", "cfg2048")
+    res_keys: tuple[str, ...] = ("cfg512", "cfg256", "cfg128", "cfg1024", "cfg2048")
     preprocessing: str = "log_snr_estimated"
     num_classes: int = 20
     reg_max: int = 16
     conf_floor: float = 1e-6
     iou_thres: float = 0.1
     iou_same_box: float = 0.9
-    backbone_mode: str = "F"
+    backbone_mode: str = "TFSep_pyramid"
     outfusion_channels_mult: int = 1
     class_index_to_name_path: Path | None = None
 
@@ -435,7 +435,20 @@ class _DeepDetector:
 
         if not spec.weights_path.is_file():
             raise FileNotFoundError(f"Missing weights for {spec.name}: {spec.weights_path}")
-        self.model.load_weights(str(spec.weights_path), device=str(self.device), eval_mode=True)
+        missing_keys, unexpected_keys = self.model.load_weights(str(spec.weights_path), device=str(self.device), eval_mode=True)
+        total_keys = len(self.model.state_dict())
+        self.weight_load_summary = {
+            "missing_keys": len(missing_keys),
+            "unexpected_keys": len(unexpected_keys),
+            "total_model_keys": total_keys,
+            "missing_key_fraction": float(len(missing_keys) / max(total_keys, 1)),
+        }
+        if self.weight_load_summary["missing_key_fraction"] > 0.20:
+            print(
+                f"[WARN] {spec.name}: {len(missing_keys)}/{total_keys} model tensors were not loaded from "
+                f"{spec.weights_path}. Check scale/backbone_mode/resolution order.",
+                flush=True,
+            )
         self.model.eval()
         self.class_index_to_name = _resolve_class_index_to_name(spec)
 
@@ -707,6 +720,15 @@ def run_deep_waveform_snr_sweep(config: DeepWaveformSweepConfig) -> Dict[str, An
             "family": spec.family,
             "weights_path": str(spec.weights_path),
             "class_index_to_name": {str(key): value for key, value in detector.class_index_to_name.items()},
+            "model_config": {
+                "scale": spec.scale,
+                "width_mult": MR_WIDTH_MULT[spec.scale] if spec.family == "mr_yolo" else YOLO11_WIDTH_MULT[spec.scale],
+                "res_key": spec.res_key if spec.family == "yolov11" else None,
+                "res_keys": list(spec.res_keys) if spec.family == "mr_yolo" else None,
+                "backbone_mode": spec.backbone_mode if spec.family == "mr_yolo" else None,
+                "outfusion_channels_mult": spec.outfusion_channels_mult if spec.family == "mr_yolo" else None,
+            },
+            "weight_load_summary": detector.weight_load_summary,
             "threshold": calibration,
             "by_snr": by_snr,
             "by_characterization": _summarize_quality(quality_rows, "snr_db"),
