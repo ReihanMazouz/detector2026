@@ -31,8 +31,8 @@ RUN_CLASSICAL_BASELINES = True
 RUN_YOLOV11 = True
 RUN_MR_YOLO = False
 
-YOLOV11_WEIGHTS = Path("/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/mr_yolo_n_fused_cfg512_cfg256_cfg128_cfg1024_cfg2048/best.pt")
-MR_YOLO_WEIGHTS = Path("/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/yolov11n_specificres_cfg512/best.pt")
+MR_YOLO_WEIGHTS = Path("/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/mr_yolo_n_fused_cfg512_cfg256_cfg128_cfg1024_cfg2048/best.pt")
+YOLOV11_WEIGHTS = Path("/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/yolov11n_specificres_cfg512/best.pt")
 
 PFA = 1e-2
 SEED = 444
