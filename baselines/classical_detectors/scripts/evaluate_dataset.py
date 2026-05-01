@@ -39,6 +39,7 @@ SEED = 444
 NOISE_VARIANCE = 1.0
 NOISE_TRIALS_CLASSICAL = 500
 NOISE_TRIALS_DEEP = 500
+DEEP_BATCH_SIZE = 64
 SNR_VALUES_DB = tuple(range(-20, 61, 2))
 WAVEFORMS: tuple[str, ...] = ()
 
@@ -253,6 +254,7 @@ def main() -> None:
                 snr_values_db=SNR_VALUES_DB,
                 waveforms=WAVEFORMS,
                 device=DEVICE,
+                batch_size=DEEP_BATCH_SIZE,
                 progress_log=_log,
             )
         )

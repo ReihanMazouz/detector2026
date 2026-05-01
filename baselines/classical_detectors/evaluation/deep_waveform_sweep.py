@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import json
 import math
 from pathlib import Path
 from typing import Any, Callable, Dict, Sequence
@@ -91,11 +92,18 @@ class DeepWaveformSweepConfig:
     snr_values_db: tuple[float, ...] = tuple(range(-20, 21, 2))
     waveforms: tuple[str, ...] = ()
     device: str = "cuda:0" if torch.cuda.is_available() else "cpu"
+    batch_size: int = 64
     progress_log: Callable[[str], None] | None = None
 
 
 def _noise_seed(seed: int, scenario_index: int) -> int:
     return int(seed + 1_000_003 * scenario_index)
+
+
+def _chunks(items: Sequence[Any], batch_size: int):
+    size = max(1, int(batch_size))
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
 
 
 def _scale_for_target_snr(signal: np.ndarray, *, noise_variance: float, snr_db: float, duration_samples: int) -> float:
@@ -432,22 +440,39 @@ class _DeepDetector:
         self.class_index_to_name = _resolve_class_index_to_name(spec)
 
     def _make_inputs(self, signal: np.ndarray) -> torch.Tensor | list[torch.Tensor]:
+        inputs = self._make_inputs_batch([signal])
+        if isinstance(inputs, list):
+            return [item[:1] for item in inputs]
+        return inputs[:1]
+
+    def _make_inputs_batch(self, signals: Sequence[np.ndarray]) -> torch.Tensor | list[torch.Tensor]:
         images = []
         for res_key in self.input_res_keys:
-            spec = _stft_spectrum(signal, res_key=res_key)
-            image = _preprocess_tensor(spec, name=self.spec.preprocessing, res_key=res_key).unsqueeze(0).to(self.device, dtype=torch.float32)
-            images.append(image)
+            batch = []
+            for signal in signals:
+                spec = _stft_spectrum(signal, res_key=res_key)
+                image = _preprocess_tensor(spec, name=self.spec.preprocessing, res_key=res_key)
+                batch.append(image)
+            images.append(torch.stack(batch, dim=0).to(self.device, dtype=torch.float32))
         return images[0] if len(images) == 1 else images
 
     def statistic(self, signal: np.ndarray) -> float:
-        detections = self.detections(signal, conf_thres=self.spec.conf_floor)
-        if detections.size == 0:
-            return 0.0
-        return float(np.max(detections[:, 4]))
+        return self.statistics_batch([signal])[0]
+
+    def statistics_batch(self, signals: Sequence[np.ndarray]) -> list[float]:
+        return [
+            float(np.max(detections[:, 4])) if detections.size else 0.0
+            for detections in self.detections_batch(signals, conf_thres=self.spec.conf_floor)
+        ]
 
     def detections(self, signal: np.ndarray, *, conf_thres: float) -> np.ndarray:
-        inputs = self._make_inputs(signal)
-        with torch.no_grad():
+        return self.detections_batch([signal], conf_thres=conf_thres)[0]
+
+    def detections_batch(self, signals: Sequence[np.ndarray], *, conf_thres: float) -> list[np.ndarray]:
+        if not signals:
+            return []
+        inputs = self._make_inputs_batch(signals)
+        with torch.inference_mode():
             dist_out, cls_out = self.model(inputs)
             processed = self.model.postprocess(
                 dist_out,
@@ -457,13 +482,34 @@ class _DeepDetector:
                 iou_thres=self.spec.iou_thres,
                 iou_same_box=self.spec.iou_same_box,
             )
-        detections = processed[0] if processed else None
-        if detections is None or len(detections) == 0:
-            return np.zeros((0, 6), dtype=np.float64)
-        return detections.detach().cpu().to(torch.float64).numpy()
+        if not processed:
+            return [np.zeros((0, 6), dtype=np.float64) for _ in signals]
+
+        outputs = []
+        for detections in processed:
+            if detections is None or len(detections) == 0:
+                outputs.append(np.zeros((0, 6), dtype=np.float64))
+            else:
+                outputs.append(detections.detach().cpu().to(torch.float64).numpy())
+        return outputs
 
     def evaluate_signal(self, signal: np.ndarray, *, threshold: float, scenario: Any) -> dict[str, Any]:
-        detections = self.detections(signal, conf_thres=threshold)
+        return self.evaluate_signal_batch([signal], threshold=threshold, scenarios=[scenario])[0]
+
+    def evaluate_signal_batch(
+        self,
+        signals: Sequence[np.ndarray],
+        *,
+        threshold: float,
+        scenarios: Sequence[Any],
+    ) -> list[dict[str, Any]]:
+        detections_batch = self.detections_batch(signals, conf_thres=threshold)
+        return [
+            self._evaluate_detections(detections, scenario=scenario)
+            for detections, scenario in zip(detections_batch, scenarios)
+        ]
+
+    def _evaluate_detections(self, detections: np.ndarray, *, scenario: Any) -> dict[str, Any]:
         if detections.size == 0:
             return {
                 "decision": False,
@@ -504,14 +550,29 @@ class _DeepDetector:
         }
 
 
-def _calibrate(detector: _DeepDetector, *, signal_length: int, noise_variance: float, pfa: float, n_trials: int, seed: int) -> dict:
+def _calibrate(
+    detector: _DeepDetector,
+    *,
+    signal_length: int,
+    noise_variance: float,
+    pfa: float,
+    n_trials: int,
+    seed: int,
+    batch_size: int,
+) -> dict:
     if int(n_trials) < int(np.ceil(1.0 / float(pfa))):
         raise ValueError("n_trials must be at least ceil(1 / pfa) to control empirical Pfa.")
     rng = np.random.default_rng(seed)
     stats = []
-    for _ in range(int(n_trials)):
-        noise = draw_real_awgn(signal_length, noise_variance=noise_variance, rng=rng)
-        stats.append(detector.statistic(noise))
+    remaining = int(n_trials)
+    while remaining > 0:
+        current_batch_size = min(max(1, int(batch_size)), remaining)
+        noises = [
+            draw_real_awgn(signal_length, noise_variance=noise_variance, rng=rng)
+            for _ in range(current_batch_size)
+        ]
+        stats.extend(detector.statistics_batch(noises))
+        remaining -= current_batch_size
     values = np.asarray(stats, dtype=np.float64)
     allowed_false_alarms = int(np.floor(float(pfa) * float(values.size)))
     sorted_values = np.sort(values)
@@ -567,6 +628,7 @@ def run_deep_waveform_snr_sweep(config: DeepWaveformSweepConfig) -> Dict[str, An
         "noise_seed_policy": "same noise realization for each scenario across all SNR levels",
         "noise_variance": float(config.noise_variance),
         "snr_values_db": [float(v) for v in config.snr_values_db],
+        "deep_batch_size": int(config.batch_size),
         "detectors": {},
     }
 
@@ -581,6 +643,7 @@ def run_deep_waveform_snr_sweep(config: DeepWaveformSweepConfig) -> Dict[str, An
             pfa=config.pfa,
             n_trials=config.noise_trials,
             seed=int(config.seed + 1009 * model_index),
+            batch_size=config.batch_size,
         )
         threshold = float(calibration["threshold"])
         _log(
@@ -595,28 +658,35 @@ def run_deep_waveform_snr_sweep(config: DeepWaveformSweepConfig) -> Dict[str, An
         for waveform_label, waveform_scenarios in grouped_scenarios.items():
             for snr_db in sorted((float(v) for v in config.snr_values_db), reverse=True):
                 decisions = []
-                for scenario_index, scenario in waveform_scenarios:
-                    rng = np.random.default_rng(_noise_seed(config.seed, scenario_index))
-                    noise = draw_real_awgn(signal_length, noise_variance=float(config.noise_variance), rng=rng)
-                    scale = _scale_for_target_snr(
-                        scenario.signal,
-                        noise_variance=float(config.noise_variance),
-                        snr_db=float(snr_db),
-                        duration_samples=int(scenario.duration_samples),
-                    )
-                    sample_eval = detector.evaluate_signal(
-                        scale * scenario.signal + noise,
+                for scenario_batch in _chunks(waveform_scenarios, config.batch_size):
+                    signals = []
+                    batch_scenarios = []
+                    for scenario_index, scenario in scenario_batch:
+                        rng = np.random.default_rng(_noise_seed(config.seed, scenario_index))
+                        noise = draw_real_awgn(signal_length, noise_variance=float(config.noise_variance), rng=rng)
+                        scale = _scale_for_target_snr(
+                            scenario.signal,
+                            noise_variance=float(config.noise_variance),
+                            snr_db=float(snr_db),
+                            duration_samples=int(scenario.duration_samples),
+                        )
+                        signals.append(scale * scenario.signal + noise)
+                        batch_scenarios.append(scenario)
+
+                    batch_eval = detector.evaluate_signal_batch(
+                        signals,
                         threshold=threshold,
-                        scenario=scenario,
+                        scenarios=batch_scenarios,
                     )
-                    decisions.append(bool(sample_eval["decision"]))
-                    quality_rows.append(
-                        {
-                            "waveform_label": waveform_label,
-                            "snr_db": float(snr_db),
-                            **sample_eval,
-                        }
-                    )
+                    for sample_eval in batch_eval:
+                        decisions.append(bool(sample_eval["decision"]))
+                        quality_rows.append(
+                            {
+                                "waveform_label": waveform_label,
+                                "snr_db": float(snr_db),
+                                **sample_eval,
+                            }
+                        )
                 pd = float(np.mean(np.asarray(decisions, dtype=np.float64)))
                 by_snr.append(
                     {
