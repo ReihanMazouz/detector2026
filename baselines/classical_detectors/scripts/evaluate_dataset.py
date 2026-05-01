@@ -40,7 +40,7 @@ NOISE_VARIANCE = 1.0
 NOISE_TRIALS_CLASSICAL = 1000
 NOISE_TRIALS_DEEP = 1000
 DEEP_BATCH_SIZE = 64
-SNR_VALUES_DB = tuple(range(-20, 61, 2))
+SNR_VALUES_DB = tuple(range(-30, 31, 2))
 WAVEFORMS: tuple[str, ...] = ()
 
 DEVICE = "cuda:0"
