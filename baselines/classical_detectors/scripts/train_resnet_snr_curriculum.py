@@ -21,7 +21,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from baselines.classical_detectors.evaluation.deep_waveform_sweep import (  # noqa: E402
-    DEFAULT_CLASS_INDEX_TO_NAME,
     DEFAULT_RES_HW,
     _noise_seed,
     _preprocess_tensor,
@@ -71,18 +70,13 @@ def _resolve_device(raw: str) -> torch.device:
     return requested
 
 
-def _class_name_to_index() -> dict[str, int]:
-    return {name: index for index, name in DEFAULT_CLASS_INDEX_TO_NAME.items()}
-
-
-def _check_class_table(num_classes: int) -> dict[int, str]:
-    class_index_to_name = dict(DEFAULT_CLASS_INDEX_TO_NAME)
-    if len(class_index_to_name) != int(num_classes):
-        names = [class_index_to_name[key] for key in sorted(class_index_to_name)]
-        raise ValueError(
-            f"Expected {num_classes} classes, got {len(class_index_to_name)}: {names}"
-        )
-    return class_index_to_name
+def _build_class_table(scenarios: Sequence[WaveformScenario]) -> tuple[dict[int, str], dict[str, int]]:
+    class_names = sorted({str(scenario.class_name) for scenario in scenarios if str(scenario.class_name)})
+    if not class_names:
+        raise ValueError("No class_name found in generated scenarios.")
+    class_index_to_name = {index: name for index, name in enumerate(class_names)}
+    class_name_to_index = {name: index for index, name in class_index_to_name.items()}
+    return class_index_to_name, class_name_to_index
 
 
 def _load_scenarios(dataset_root: Path) -> list[WaveformScenario]:
@@ -412,7 +406,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-root", type=Path, default=DEFAULT_VAL_ROOT)
     parser.add_argument("--res-key", default="cfg512")
     parser.add_argument("--preprocessing", default="log_snr_estimated")
-    parser.add_argument("--num-classes", type=int, default=20)
+    parser.add_argument("--num-classes", type=int, default=None)
     parser.add_argument("--pfa", type=float, default=1e-2)
     parser.add_argument("--noise-trials", type=int, default=1000)
     parser.add_argument("--noise-variance", type=float, default=1.0)
@@ -457,8 +451,6 @@ def main() -> None:
     if not (val_root / "manifest.json").is_file():
         raise FileNotFoundError(f"Missing validation manifest: {val_root / 'manifest.json'}")
 
-    class_index_to_name = _check_class_table(args.num_classes)
-    class_name_to_index = _class_name_to_index()
     train_snr_values = _snr_sequence(args.train_snr_start, args.train_snr_end, args.train_snr_step)
     if len(train_snr_values) > 61:
         raise ValueError("Training SNR sequence is longer than the locked seed range 400..460.")
@@ -478,7 +470,9 @@ def main() -> None:
     if not val_scenarios:
         raise RuntimeError(f"No validation scenarios found in {val_root}")
 
-    model = resnet50d_classifier(num_classes=args.num_classes, input_canals=1, device=device)
+    model = None
+    class_index_to_name: dict[int, str] = {}
+    class_name_to_index: dict[str, int] = {}
     all_rows: list[dict[str, Any]] = []
     training_history: list[dict[str, Any]] = []
 
@@ -496,10 +490,26 @@ def main() -> None:
         )
 
         train_scenarios = _load_scenarios(args.work_dir.resolve())
-        train_classes = sorted({scenario.class_name for scenario in train_scenarios})
+        train_classes = sorted({str(scenario.class_name) for scenario in train_scenarios})
+        if model is None:
+            class_index_to_name, class_name_to_index = _build_class_table(train_scenarios)
+            if args.num_classes is not None and int(args.num_classes) != len(class_index_to_name):
+                raise ValueError(
+                    f"--num-classes={args.num_classes} does not match classes produced by "
+                    f"{generator_script}: {len(class_index_to_name)} classes={list(class_name_to_index)}"
+                )
+            model = resnet50d_classifier(num_classes=len(class_index_to_name), input_canals=1, device=device)
+            _log(f"using {len(class_index_to_name)} classes: {class_index_to_name}")
         unknown_classes = [name for name in train_classes if name not in class_name_to_index]
         if unknown_classes:
             raise ValueError(f"Generated dataset contains unknown classes: {unknown_classes}")
+        val_classes = sorted({str(scenario.class_name) for scenario in val_scenarios})
+        unknown_val_classes = [name for name in val_classes if name not in class_name_to_index]
+        if unknown_val_classes:
+            raise ValueError(
+                "Validation dataset contains classes absent from the generated training class table: "
+                f"{unknown_val_classes}"
+            )
         _log(f"training samples={len(train_scenarios)} classes={train_classes}")
 
         train_dataset = NoisyWaveformClassificationDataset(
