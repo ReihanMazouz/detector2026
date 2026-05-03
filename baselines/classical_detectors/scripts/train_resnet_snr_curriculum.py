@@ -94,24 +94,38 @@ class NoisyWaveformClassificationDataset(Dataset):
         scenarios: Sequence[WaveformScenario],
         *,
         class_name_to_index: dict[str, int],
+        num_classes: int,
         snr_db: float,
         noise_variance: float,
+        noise_samples_per_signal: float,
         seed: int,
         res_key: str,
         preprocessing: str,
     ) -> None:
         self.scenarios = list(scenarios)
         self.class_name_to_index = dict(class_name_to_index)
+        self.num_classes = int(num_classes)
         self.snr_db = float(snr_db)
         self.noise_variance = float(noise_variance)
+        self.noise_sample_count = int(round(len(self.scenarios) * float(noise_samples_per_signal)))
         self.seed = int(seed)
         self.res_key = str(res_key)
         self.preprocessing = str(preprocessing)
+        if not self.scenarios:
+            raise ValueError("At least one signal scenario is required.")
+        self.signal_length = int(len(self.scenarios[0].signal))
 
     def __len__(self) -> int:
-        return len(self.scenarios)
+        return len(self.scenarios) + self.noise_sample_count
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        if index >= len(self.scenarios):
+            noise_index = index - len(self.scenarios)
+            rng = np.random.default_rng(_noise_seed(self.seed, len(self.scenarios) + noise_index))
+            noise = draw_real_awgn(self.signal_length, noise_variance=self.noise_variance, rng=rng)
+            image = _signal_to_image(noise, res_key=self.res_key, preprocessing=self.preprocessing)
+            return image, torch.zeros(self.num_classes, dtype=torch.float32)
+
         scenario = self.scenarios[index]
         try:
             label = self.class_name_to_index[str(scenario.class_name)]
@@ -131,7 +145,9 @@ class NoisyWaveformClassificationDataset(Dataset):
             res_key=self.res_key,
             preprocessing=self.preprocessing,
         )
-        return image, torch.tensor(label, dtype=torch.long)
+        target = torch.zeros(self.num_classes, dtype=torch.float32)
+        target[label] = 1.0
+        return image, target
 
 
 @dataclass(frozen=True)
@@ -191,7 +207,7 @@ def _train_one_snr(
         pin_memory=device.type == "cuda",
     )
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
-    criterion = torch.nn.CrossEntropyLoss()
+    criterion = torch.nn.BCEWithLogitsLoss()
     history = []
     best_loss = float("inf")
     epochs_without_improvement = 0
@@ -199,30 +215,48 @@ def _train_one_snr(
     model.train()
     for epoch in range(1, int(epochs) + 1):
         total_loss = 0.0
-        total_correct = 0
+        total_signal_correct = 0
+        total_signal_samples = 0
+        total_noise_rejected = 0
+        total_noise_samples = 0
         total_samples = 0
-        for images, labels in loader:
+        for images, targets in loader:
             images = images.to(device, dtype=torch.float32, non_blocking=True)
-            labels = labels.to(device, dtype=torch.long, non_blocking=True)
+            targets = targets.to(device, dtype=torch.float32, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
             logits = model(images)
-            loss = criterion(logits, labels)
+            loss = criterion(logits, targets)
             loss.backward()
             optimizer.step()
 
-            batch_size_actual = int(labels.numel())
+            batch_size_actual = int(targets.shape[0])
             total_loss += float(loss.item()) * batch_size_actual
-            total_correct += int((logits.argmax(dim=1) == labels).sum().item())
+            probs = torch.sigmoid(logits)
+            target_is_signal = targets.sum(dim=1) > 0.0
+            if bool(target_is_signal.any()):
+                total_signal_correct += int(
+                    (probs[target_is_signal].argmax(dim=1) == targets[target_is_signal].argmax(dim=1)).sum().item()
+                )
+                total_signal_samples += int(target_is_signal.sum().item())
+            target_is_noise = ~target_is_signal
+            if bool(target_is_noise.any()):
+                total_noise_rejected += int((probs[target_is_noise].max(dim=1).values <= 0.5).sum().item())
+                total_noise_samples += int(target_is_noise.sum().item())
             total_samples += batch_size_actual
 
         row = {
             "epoch": float(epoch),
             "loss": float(total_loss / max(total_samples, 1)),
-            "accuracy": float(total_correct / max(total_samples, 1)),
+            "signal_accuracy": float(total_signal_correct / max(total_signal_samples, 1)),
+            "noise_rejection_at_0_5": float(total_noise_rejected / max(total_noise_samples, 1)),
         }
         history.append(row)
-        _log(f"epoch={epoch} loss={row['loss']:.6f} accuracy={row['accuracy']:.4f}")
+        _log(
+            f"epoch={epoch} loss={row['loss']:.6f} "
+            f"signal_accuracy={row['signal_accuracy']:.4f} "
+            f"noise_rejection_at_0_5={row['noise_rejection_at_0_5']:.4f}"
+        )
         if int(early_stopping_patience) > 0:
             improvement = best_loss - float(row["loss"])
             if improvement > float(early_stopping_min_delta):
@@ -259,7 +293,7 @@ def _confidence_scores(
                 for signal in batch_signals
             ]
             batch = torch.stack(images, dim=0).to(device, dtype=torch.float32)
-            probs = torch.softmax(model(batch), dim=1)
+            probs = torch.sigmoid(model(batch))
             scores.extend(probs.max(dim=1).values.detach().cpu().tolist())
     return [float(score) for score in scores]
 
@@ -410,6 +444,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pfa", type=float, default=1e-2)
     parser.add_argument("--noise-trials", type=int, default=1000)
     parser.add_argument("--noise-variance", type=float, default=1.0)
+    parser.add_argument(
+        "--noise-samples-per-signal",
+        type=float,
+        default=1.0,
+        help="Number of noise-only training samples per signal sample. Noise targets are all-zero BCE vectors.",
+    )
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--eval-batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -443,6 +483,8 @@ def main() -> None:
     args = parse_args()
     if args.res_key not in DEFAULT_RES_HW:
         raise ValueError(f"Unknown res_key '{args.res_key}'. Expected one of {sorted(DEFAULT_RES_HW)}.")
+    if float(args.noise_samples_per_signal) < 0.0:
+        raise ValueError("--noise-samples-per-signal must be non-negative.")
 
     generator_script = args.generator_script.resolve()
     val_root = args.val_root.resolve()
@@ -515,8 +557,10 @@ def main() -> None:
         train_dataset = NoisyWaveformClassificationDataset(
             train_scenarios,
             class_name_to_index=class_name_to_index,
+            num_classes=len(class_index_to_name),
             snr_db=float(train_snr),
             noise_variance=float(args.noise_variance),
+            noise_samples_per_signal=float(args.noise_samples_per_signal),
             seed=seed,
             res_key=args.res_key,
             preprocessing=args.preprocessing,
@@ -538,6 +582,8 @@ def main() -> None:
                 "train_snr": float(train_snr),
                 "seed": seed,
                 "n_train_samples": len(train_dataset),
+                "n_signal_samples": len(train_scenarios),
+                "n_noise_samples": train_dataset.noise_sample_count,
                 "epochs": epoch_history,
             }
         )
@@ -593,7 +639,7 @@ def main() -> None:
         "eval_snr_values": [float(v) for v in eval_snr_values],
         "training_history": training_history,
         "pd_rows": all_rows,
-        "pd_definition": "Pd = P(max softmax > threshold), threshold calibrated on noise-only H0 at target Pfa.",
+        "pd_definition": "Pd = P(max sigmoid(logits) > threshold), threshold calibrated on noise-only H0 at target Pfa. Noise-only training targets are all-zero BCE vectors.",
     }
     json_path = args.output_dir / "resnet_snr_curriculum_summary.json"
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
