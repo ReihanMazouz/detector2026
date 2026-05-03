@@ -186,6 +186,8 @@ def _train_one_snr(
     lr: float,
     weight_decay: float,
     num_workers: int,
+    early_stopping_patience: int,
+    early_stopping_min_delta: float,
 ) -> list[dict[str, float]]:
     loader = DataLoader(
         train_dataset,
@@ -197,6 +199,8 @@ def _train_one_snr(
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
     criterion = torch.nn.CrossEntropyLoss()
     history = []
+    best_loss = float("inf")
+    epochs_without_improvement = 0
 
     model.train()
     for epoch in range(1, int(epochs) + 1):
@@ -225,6 +229,20 @@ def _train_one_snr(
         }
         history.append(row)
         _log(f"epoch={epoch} loss={row['loss']:.6f} accuracy={row['accuracy']:.4f}")
+        if int(early_stopping_patience) > 0:
+            improvement = best_loss - float(row["loss"])
+            if improvement > float(early_stopping_min_delta):
+                best_loss = float(row["loss"])
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+                if epochs_without_improvement >= int(early_stopping_patience):
+                    _log(
+                        "early stopping: "
+                        f"loss did not improve by {float(early_stopping_min_delta):.6g} "
+                        f"for {int(early_stopping_patience)} epochs"
+                    )
+                    break
     return history
 
 
@@ -404,6 +422,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=5,
+        help="Stop training a SNR stage after this many epochs without training-loss improvement. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        type=float,
+        default=1e-4,
+        help="Minimum training-loss decrease required to reset early-stopping patience.",
+    )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--python-executable", default=sys.executable)
     parser.add_argument("--eval-snr-start", type=int, default=-30)
@@ -490,6 +520,8 @@ def main() -> None:
             lr=args.lr,
             weight_decay=args.weight_decay,
             num_workers=args.num_workers,
+            early_stopping_patience=args.early_stopping_patience,
+            early_stopping_min_delta=args.early_stopping_min_delta,
         )
         training_history.append(
             {
