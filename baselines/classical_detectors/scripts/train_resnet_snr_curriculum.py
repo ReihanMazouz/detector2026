@@ -611,12 +611,14 @@ def _evaluate_pd_by_snr(
     res_key: str,
     preprocessing: str,
     batch_size: int,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows = []
+    waveform_rows = []
     signal_length = int(len(scenarios[0].signal))
     for snr_db in eval_snr_values:
         signals = []
         targets = []
+        waveform_labels = []
         for scenario_index, scenario in enumerate(scenarios):
             rng = np.random.default_rng(_noise_seed(seed, scenario_index))
             noise = draw_real_awgn(signal_length, noise_variance=float(noise_variance), rng=rng)
@@ -628,6 +630,7 @@ def _evaluate_pd_by_snr(
             )
             signals.append(scale * scenario.signal + noise)
             targets.append(int(class_name_to_index[str(scenario.class_name)]))
+            waveform_labels.append(str(scenario.waveform_label))
         scores, predictions = _prediction_scores(
             model=model,
             signals=signals,
@@ -636,7 +639,8 @@ def _evaluate_pd_by_snr(
             preprocessing=preprocessing,
             batch_size=batch_size,
         )
-        decisions = np.asarray(scores, dtype=np.float64) > float(threshold)
+        score_array = np.asarray(scores, dtype=np.float64)
+        decisions = score_array > float(threshold)
         pred_array = np.asarray(predictions, dtype=np.int64)
         target_array = np.asarray(targets, dtype=np.int64)
         correct = pred_array == target_array
@@ -649,21 +653,46 @@ def _evaluate_pd_by_snr(
                 "classification_accuracy_detected": (
                     float(np.mean(detected_correct)) if detected_correct.size else float("nan")
                 ),
-                "mean_score": float(np.mean(np.asarray(scores, dtype=np.float64))) if scores else float("nan"),
+                "mean_score": float(np.mean(score_array)) if score_array.size else float("nan"),
                 "n_samples": int(decisions.size),
                 "n_detected": int(np.sum(decisions)),
             }
         )
+        for waveform_label in sorted(set(waveform_labels)):
+            mask = np.asarray([label == waveform_label for label in waveform_labels], dtype=bool)
+            waveform_decisions = decisions[mask]
+            waveform_correct = correct[mask]
+            waveform_detected_correct = waveform_correct[waveform_decisions]
+            waveform_scores = score_array[mask]
+            waveform_rows.append(
+                {
+                    "waveform_label": waveform_label,
+                    "eval_snr": float(snr_db),
+                    "pd": float(np.mean(waveform_decisions)) if waveform_decisions.size else float("nan"),
+                    "classification_accuracy": (
+                        float(np.mean(waveform_correct)) if waveform_correct.size else float("nan")
+                    ),
+                    "classification_accuracy_detected": (
+                        float(np.mean(waveform_detected_correct))
+                        if waveform_detected_correct.size
+                        else float("nan")
+                    ),
+                    "mean_score": float(np.mean(waveform_scores)) if waveform_scores.size else float("nan"),
+                    "n_samples": int(waveform_decisions.size),
+                    "n_detected": int(np.sum(waveform_decisions)),
+                }
+            )
         _log(
             f"eval_snr={float(snr_db):.2f} pd={rows[-1]['pd']:.4f} "
             f"class_acc_detected={rows[-1]['classification_accuracy_detected']:.4f}"
         )
-    return rows
+    return rows, waveform_rows
 
 
 def _write_csv(rows: Sequence[dict[str, Any]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
+    fieldnames = ["waveform_label"] if any("waveform_label" in row for row in rows) else []
+    fieldnames += [
         "train_snr",
         "eval_snr",
         "pd",
@@ -685,19 +714,27 @@ def _write_csv(rows: Sequence[dict[str, Any]], output_path: Path) -> None:
 def _plot_pd_curves(rows: Sequence[dict[str, Any]], output_path: Path) -> None:
     import matplotlib.pyplot as plt
 
-    grouped: dict[float, list[dict[str, Any]]] = {}
+    grouped: dict[tuple[str | None, float], list[dict[str, Any]]] = {}
     for row in rows:
-        grouped.setdefault(float(row["train_snr"]), []).append(row)
+        waveform_label = str(row["waveform_label"]) if "waveform_label" in row else None
+        grouped.setdefault((waveform_label, float(row["train_snr"])), []).append(row)
 
-    fig, axis = plt.subplots(figsize=(10.0, 6.0))
-    for train_snr, train_rows in sorted(grouped.items(), reverse=True):
+    has_waveform_labels = any(key[0] is not None for key in grouped)
+    fig, axis = plt.subplots(figsize=(12.0, 7.0) if has_waveform_labels else (10.0, 6.0))
+    for (waveform_label, train_snr), train_rows in sorted(
+        grouped.items(),
+        key=lambda item: (str(item[0][0]), -item[0][1]),
+    ):
         train_rows = sorted(train_rows, key=lambda item: float(item["eval_snr"]))
+        label = f"train {train_snr:g} dB"
+        if waveform_label is not None:
+            label = f"{waveform_label}, {label}"
         axis.plot(
             [float(row["eval_snr"]) for row in train_rows],
             [float(row["pd"]) for row in train_rows],
             linewidth=1.2,
             alpha=0.75,
-            label=f"train {train_snr:g} dB",
+            label=label,
         )
     axis.set_xlabel("Evaluation SNR (dB)")
     axis.set_ylabel("Pd")
@@ -887,6 +924,7 @@ def main() -> None:
     class_index_to_name: dict[int, str] = {}
     class_name_to_index: dict[str, int] = {}
     all_rows: list[dict[str, Any]] = []
+    all_waveform_rows: list[dict[str, Any]] = []
     training_history: list[dict[str, Any]] = []
 
     for step_index, train_snr in enumerate(train_snr_values):
@@ -1047,7 +1085,7 @@ def main() -> None:
         _log(
             f"threshold={calibration.threshold:.6g} empirical_pfa={calibration.empirical_pfa:.6g}"
         )
-        eval_rows = _evaluate_pd_by_snr(
+        eval_rows, eval_waveform_rows = _evaluate_pd_by_snr(
             model=model,
             scenarios=test_scenarios,
             class_name_to_index=class_name_to_index,
@@ -1075,13 +1113,35 @@ def main() -> None:
                     "empirical_pfa": float(calibration.empirical_pfa),
                 }
             )
+        for row in eval_waveform_rows:
+            all_waveform_rows.append(
+                {
+                    "waveform_label": str(row["waveform_label"]),
+                    "train_snr": float(train_snr),
+                    "eval_snr": float(row["eval_snr"]),
+                    "pd": float(row["pd"]),
+                    "classification_accuracy": float(row["classification_accuracy"]),
+                    "classification_accuracy_detected": float(row["classification_accuracy_detected"]),
+                    "mean_score": float(row["mean_score"]),
+                    "n_samples": int(row["n_samples"]),
+                    "n_detected": int(row["n_detected"]),
+                    "threshold": float(calibration.threshold),
+                    "empirical_pfa": float(calibration.empirical_pfa),
+                }
+            )
 
         csv_path = args.output_dir / "resnet_snr_curriculum_pd.csv"
         _write_csv(all_rows, csv_path)
         _log(f"updated {csv_path}")
+        waveform_csv_path = args.output_dir / "resnet_snr_curriculum_pd_by_waveform.csv"
+        _write_csv(all_waveform_rows, waveform_csv_path)
+        _log(f"updated {waveform_csv_path}")
         diagonal_csv_path = args.output_dir / "resnet_snr_curriculum_pd_diagonal.csv"
         _write_csv(_diagonal_rows(all_rows), diagonal_csv_path)
         _log(f"updated {diagonal_csv_path}")
+        waveform_diagonal_csv_path = args.output_dir / "resnet_snr_curriculum_pd_by_waveform_diagonal.csv"
+        _write_csv(_diagonal_rows(all_waveform_rows), waveform_diagonal_csv_path)
+        _log(f"updated {waveform_diagonal_csv_path}")
 
         if stage_work_dir.exists():
             shutil.rmtree(stage_work_dir)
@@ -1096,7 +1156,8 @@ def main() -> None:
         "eval_snr_values": [float(v) for v in eval_snr_values],
         "training_history": training_history,
         "pd_rows": all_rows,
-        "pd_definition": "Pd = P(max sigmoid(logits) > threshold), threshold calibrated on noise-only H0 at target Pfa. Noise-only training targets are all-zero BCE vectors.",
+        "pd_by_waveform_rows": all_waveform_rows,
+        "pd_definition": "Pd = P(max sigmoid(logits) > threshold), threshold calibrated on noise-only H0 at target Pfa. Noise-only training targets are all-zero BCE vectors. pd_by_waveform_rows applies the same definition after grouping test scenarios by waveform_label.",
     }
     json_path = args.output_dir / "resnet_snr_curriculum_summary.json"
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1106,6 +1167,9 @@ def main() -> None:
         plot_path = args.output_dir / "resnet_snr_curriculum_pd_vs_snr.png"
         _plot_pd_curves(all_rows, plot_path)
         _log(f"wrote {plot_path}")
+        waveform_plot_path = args.output_dir / "resnet_snr_curriculum_pd_by_waveform_vs_snr.png"
+        _plot_pd_curves(all_waveform_rows, waveform_plot_path)
+        _log(f"wrote {waveform_plot_path}")
         diagonal_plot_path = args.output_dir / "resnet_snr_curriculum_pd_diagonal.png"
         _plot_diagonal_pd(all_rows, diagonal_plot_path)
         _log(f"wrote {diagonal_plot_path}")
