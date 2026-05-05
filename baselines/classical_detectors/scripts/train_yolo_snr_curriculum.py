@@ -62,7 +62,7 @@ DEFAULT_RES_KEYS = ("cfg128", "cfg256", "cfg512", "cfg1024", "cfg2048")
 DEFAULT_BENCHMARK_MR_RES_KEYS = ("cfg512", "cfg256", "cfg128", "cfg1024", "cfg2048")
 DEFAULT_YOLO_VN_WIDTH_MULT = 0.25
 DEFAULT_MR_VN_WIDTH_MULT = 0.25
-FIT_TRAIN_RATIO = 1.0
+DEFAULT_FIT_TRAIN_RATIO = 0.9
 
 
 def _log(message: str) -> None:
@@ -224,6 +224,7 @@ def _generate_yolo_dataset(
     snr_db: float,
     seed: int,
     scenarios_per_waveform: int,
+    fit_train_ratio: float,
     waveforms: str,
     generation_preprocessing: str,
 ) -> dict[int, str]:
@@ -242,13 +243,13 @@ def _generate_yolo_dataset(
 
     _log(
         f"generating YOLO dataset snr={snr_db:g} seed={seed} "
-        f"samples={len(scenarios)} fit_train_ratio={FIT_TRAIN_RATIO:g}"
+        f"samples={len(scenarios)} fit_train_ratio={fit_train_ratio:g}"
     )
     generate_and_store_spectrum_multi(
         scenarios=scenarios,
         base_path=str(output_dir),
         split_train_test=True,
-        train_ratio=FIT_TRAIN_RATIO,
+        train_ratio=float(fit_train_ratio),
         acquisition_time=ACQUISITION_TIME,
         stft_cfgs=STFT_CFGS,
         seed=seed,
@@ -361,8 +362,8 @@ def _train_model_job(
         full_eval_every=int(args.full_eval_every),
         save_last_every=int(args.save_last_every),
         monitor=args.monitor,
-        validate=False,
-        minimal_outputs=True,
+        validate=not bool(args.no_stage_validation),
+        minimal_outputs=bool(args.minimal_outputs),
     )
     best_path = job.output_dir / "best.pt"
     last_path = job.output_dir / "last.pt"
@@ -388,6 +389,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-snr-step", type=int, default=1)
     parser.add_argument("--seed-start", type=int, default=400)
     parser.add_argument("--scenarios-per-waveform", type=int, default=500)
+    parser.add_argument(
+        "--fit-train-ratio",
+        type=float,
+        default=DEFAULT_FIT_TRAIN_RATIO,
+        help="Fraction of generated stage scenarios used for training. The remainder is used for stage validation.",
+    )
     parser.add_argument(
         "--first-snr-scenarios-per-waveform",
         type=int,
@@ -429,9 +436,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--monitor", default="train_loss")
+    parser.add_argument("--monitor", default="val_loss")
     parser.add_argument("--full-eval-every", type=int, default=1)
     parser.add_argument("--save-last-every", type=int, default=5)
+    parser.add_argument(
+        "--no-stage-validation",
+        action="store_true",
+        help="Disable stage validation and train on the full generated stage dataset.",
+    )
+    parser.add_argument(
+        "--minimal-outputs",
+        action="store_true",
+        help="Reduce training side outputs. Leave disabled to keep train logs and best.pt selection on the validation monitor.",
+    )
     parser.add_argument("--pfa", type=float, default=1e-2)
     parser.add_argument("--noise-trials", type=int, default=1000)
     parser.add_argument("--noise-variance", type=float, default=1.0)
@@ -723,6 +740,13 @@ def main() -> None:
         raise FileNotFoundError(f"Missing validation manifest: {Path(args.val_root) / 'manifest.json'}")
     if args.res_key not in DEFAULT_RES_HW:
         raise ValueError(f"Unknown --res-key {args.res_key}. Expected one of {sorted(DEFAULT_RES_HW)}.")
+    if bool(args.no_stage_validation):
+        if str(args.monitor).strip() != "train_loss":
+            _log(f"stage validation disabled; switching monitor from {args.monitor!r} to 'train_loss'")
+            args.monitor = "train_loss"
+        args.fit_train_ratio = 1.0
+    elif not 0.0 < float(args.fit_train_ratio) < 1.0:
+        raise ValueError("--fit-train-ratio must be in (0, 1) when stage validation is enabled.")
     for key in tuple(args.mr_res_keys.split(",")):
         if key not in DEFAULT_RES_HW:
             raise ValueError(f"Unknown MR resolution key {key}. Expected one of {sorted(DEFAULT_RES_HW)}.")
@@ -771,6 +795,7 @@ def main() -> None:
             snr_db=float(train_snr),
             seed=seed,
             scenarios_per_waveform=scenarios_per_waveform,
+            fit_train_ratio=float(args.fit_train_ratio),
             waveforms=args.waveforms,
             generation_preprocessing=args.generation_preprocessing,
         )
