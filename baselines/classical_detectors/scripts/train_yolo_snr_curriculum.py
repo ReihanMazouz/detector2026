@@ -362,8 +362,6 @@ def _train_model_job(
         full_eval_every=int(args.full_eval_every),
         save_last_every=int(args.save_last_every),
         monitor=args.monitor,
-        validate=not bool(args.no_stage_validation),
-        minimal_outputs=bool(args.minimal_outputs),
     )
     best_path = job.output_dir / "best.pt"
     last_path = job.output_dir / "last.pt"
@@ -439,16 +437,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--monitor", default="val_loss")
     parser.add_argument("--full-eval-every", type=int, default=1)
     parser.add_argument("--save-last-every", type=int, default=5)
-    parser.add_argument(
-        "--no-stage-validation",
-        action="store_true",
-        help="Disable stage validation and train on the full generated stage dataset.",
-    )
-    parser.add_argument(
-        "--minimal-outputs",
-        action="store_true",
-        help="Reduce training side outputs. Leave disabled to keep train logs and best.pt selection on the validation monitor.",
-    )
     parser.add_argument("--pfa", type=float, default=1e-2)
     parser.add_argument("--noise-trials", type=int, default=1000)
     parser.add_argument("--noise-variance", type=float, default=1.0)
@@ -740,13 +728,8 @@ def main() -> None:
         raise FileNotFoundError(f"Missing validation manifest: {Path(args.val_root) / 'manifest.json'}")
     if args.res_key not in DEFAULT_RES_HW:
         raise ValueError(f"Unknown --res-key {args.res_key}. Expected one of {sorted(DEFAULT_RES_HW)}.")
-    if bool(args.no_stage_validation):
-        if str(args.monitor).strip() != "train_loss":
-            _log(f"stage validation disabled; switching monitor from {args.monitor!r} to 'train_loss'")
-            args.monitor = "train_loss"
-        args.fit_train_ratio = 1.0
-    elif not 0.0 < float(args.fit_train_ratio) < 1.0:
-        raise ValueError("--fit-train-ratio must be in (0, 1) when stage validation is enabled.")
+    if not 0.0 < float(args.fit_train_ratio) < 1.0:
+        raise ValueError("--fit-train-ratio must be in (0, 1).")
     for key in tuple(args.mr_res_keys.split(",")):
         if key not in DEFAULT_RES_HW:
             raise ValueError(f"Unknown MR resolution key {key}. Expected one of {sorted(DEFAULT_RES_HW)}.")
