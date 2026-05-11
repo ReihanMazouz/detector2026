@@ -26,7 +26,7 @@ class YOLODatasetFusedMultiRes(Dataset):
             if f.lower().endswith(".pt")
         )
         self.labels_dir = labels_dir
-        self._res_keys = res_keys
+        self._res_keys = tuple(res_keys) if res_keys is not None else None
         self.max_dim = max_dim
         self.preprocess_tensor = build_preprocessor(preprocessing, preprocessing_kwargs)
 
@@ -75,11 +75,12 @@ class YOLODatasetFusedMultiRes(Dataset):
                     self._ensure_res_keys(psnr)
                     break
 
+        if self._res_keys is not None and len(raw_specs) != len(self._res_keys):
+            raise ValueError(
+                f"Sample {data_path} has {len(raw_specs)} resolutions, "
+                f"but res_keys defines {len(self._res_keys)}: {self._res_keys}."
+            )
         sample_res_keys = list(self._res_keys) if self._res_keys is not None else [None] * len(raw_specs)
-        if len(sample_res_keys) < len(raw_specs):
-            sample_res_keys.extend([None] * (len(raw_specs) - len(sample_res_keys)))
-        else:
-            sample_res_keys = sample_res_keys[: len(raw_specs)]
 
         specs = []
         active_res_keys = []
@@ -187,7 +188,7 @@ class YOLODatasetFusedMultiRes(Dataset):
         res_keys = None
         for item in batch:
             if item.get("res_keys"):
-                res_keys = item["res_keys"]
+                res_keys = tuple(item["res_keys"])
                 break
 
         return imgs, targets, res_keys

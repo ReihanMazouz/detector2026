@@ -198,8 +198,16 @@ class BaseModel(nn.Module):
         path = os.path.join(output_dir, filename)
 
         try:
-            dummy_input = [torch.randn(shape).to(model.device) for shape in self.input_resolutions]
-            input_data = dummy_input if len(dummy_input) > 1 else dummy_input[0]
+            input_channels = int(getattr(getattr(model, "conv1", None), "conv", None).in_channels) if hasattr(getattr(model, "conv1", None), "conv") else 1
+            if hasattr(model, "input_resolutions"):
+                input_shapes = [(1, input_channels, int(height), int(width)) for height, width in model.input_resolutions]
+            elif getattr(model, "input_hw", None) is not None:
+                height, width = model.input_hw
+                input_shapes = [(1, input_channels, int(height), int(width))]
+            else:
+                input_shapes = [(1, input_channels, 256, 256)]
+            dummy_input = [torch.randn(shape).to(model.device) for shape in input_shapes]
+            input_data = (dummy_input,) if len(dummy_input) > 1 else dummy_input[0]
 
             # Résumé structuré avec torchinfo
             model_summary = summary(
@@ -357,18 +365,28 @@ class BaseModel(nn.Module):
             )
 
         else:
+            fused_res_keys = None
+            if isinstance(select_res, dict):
+                fused_res_keys = select_res.get("res_keys")
+            if fused_res_keys is None:
+                fused_res_keys = getattr(self, "res_keys", None)
+            fused_res_keys = tuple(fused_res_keys) if fused_res_keys is not None else None
             train_dataset = YOLODataset(
                 os.path.join(data_dir, "train/data"),
                 os.path.join(data_dir, "train/labels_detect"),
+                res_keys=fused_res_keys,
                 preprocessing=preprocessing,
                 preprocessing_kwargs=preprocessing_kwargs,
             )
             val_dataset = YOLODataset(
                 os.path.join(data_dir, "val/data"),
                 os.path.join(data_dir, "val/labels_detect"),
+                res_keys=fused_res_keys,
                 preprocessing=preprocessing,
                 preprocessing_kwargs=preprocessing_kwargs,
             )
+            if fused_res_keys is not None:
+                print(f"[info] Fused MR resolution order: {list(fused_res_keys)}")
 
         img_size = _resolve_eval_img_size(self, val_dataset, fallback=img_size)
 
@@ -456,6 +474,11 @@ class BaseModel(nn.Module):
             train_pbar = tqdm(train_loader, desc=f"Epoch {epoch} 🔧 Training", unit="batch")
             batch_wait_start = time.perf_counter()
             for imgs, targets, res_keys in train_pbar:
+                if hasattr(self, "res_keys") and res_keys is not None and tuple(res_keys) != tuple(self.res_keys):
+                    raise ValueError(
+                        f"Batch resolution order mismatch: dataset returned {tuple(res_keys)}, "
+                        f"model expects {tuple(self.res_keys)}."
+                    )
                 batch_ready_time = time.perf_counter()
                 train_data_time += batch_ready_time - batch_wait_start
 
@@ -552,6 +575,11 @@ class BaseModel(nn.Module):
             with torch.no_grad():
                 batch_wait_start = time.perf_counter()
                 for imgs, targets, res_keys in val_pbar:
+                    if hasattr(self, "res_keys") and res_keys is not None and tuple(res_keys) != tuple(self.res_keys):
+                        raise ValueError(
+                            f"Validation batch resolution order mismatch: dataset returned {tuple(res_keys)}, "
+                            f"model expects {tuple(self.res_keys)}."
+                        )
                     batch_ready_time = time.perf_counter()
                     val_data_time += batch_ready_time - batch_wait_start
 

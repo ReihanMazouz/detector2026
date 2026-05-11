@@ -59,7 +59,7 @@ DEFAULT_RES_HW = {
     "cfg2048": (1024, 64),
 }
 DEFAULT_RES_KEYS = ("cfg128", "cfg256", "cfg512", "cfg1024", "cfg2048")
-DEFAULT_BENCHMARK_MR_RES_KEYS = ("cfg512", "cfg256", "cfg128", "cfg1024", "cfg2048")
+DEFAULT_BENCHMARK_MR_RES_KEYS = DEFAULT_RES_KEYS
 DEFAULT_YOLO_VN_WIDTH_MULT = 0.25
 DEFAULT_MR_VN_WIDTH_MULT = 0.25
 DEFAULT_FIT_TRAIN_RATIO = 0.9
@@ -200,6 +200,19 @@ def _parse_waveforms(raw: str) -> set[str] | None:
     return {item.strip() for item in str(raw).split(",") if item.strip()}
 
 
+def _parse_res_keys(raw: str) -> tuple[str, ...]:
+    res_keys = tuple(item.strip() for item in str(raw).split(",") if item.strip())
+    if not res_keys:
+        raise ValueError("At least one MR resolution key must be provided.")
+    unknown = [key for key in res_keys if key not in DEFAULT_RES_HW]
+    if unknown:
+        raise ValueError(f"Unknown MR resolution key(s) {unknown}. Expected one of {list(DEFAULT_RES_KEYS)}.")
+    duplicates = sorted({key for key in res_keys if res_keys.count(key) > 1})
+    if duplicates:
+        raise ValueError(f"Duplicate MR resolution key(s): {duplicates}.")
+    return res_keys
+
+
 def _benchmark_weight_defaults(root: Path, res_key: str) -> dict[str, Path]:
     mr_suffix = "_".join(DEFAULT_BENCHMARK_MR_RES_KEYS)
     return {
@@ -303,7 +316,7 @@ def _build_model(
             input_hw=DEFAULT_RES_HW[res_key],
         )
     if job.family == "mr_yolo":
-        return MR_YOLO(
+        model = MR_YOLO(
             input_resolutions=[DEFAULT_RES_HW[key] for key in res_keys],
             output_dir=str(job.output_dir),
             num_classes=num_classes,
@@ -313,6 +326,8 @@ def _build_model(
             backbone_mode=mr_backbone_mode,
             outfusion_channels_mult=outfusion_channels_mult,
         )
+        model.res_keys = tuple(res_keys)
+        return model
     raise ValueError(f"Unknown model family: {job.family}")
 
 
@@ -332,7 +347,7 @@ def _train_model_job(
         num_classes=len(class_index_to_name),
         input_channels=input_channels,
         res_key=args.res_key,
-        res_keys=tuple(args.mr_res_keys.split(",")),
+        res_keys=_parse_res_keys(args.mr_res_keys),
         width_mult=float(args.width_mult),
         mr_width_mult=float(args.mr_width_mult),
         mr_backbone_mode=args.mr_backbone_mode,
@@ -346,6 +361,8 @@ def _train_model_job(
     select_res = None
     if dataset_type == "specificres":
         select_res = {"res_hw": DEFAULT_RES_HW[args.res_key], "res_key": args.res_key}
+    elif dataset_type == "fused":
+        select_res = {"res_keys": _parse_res_keys(args.mr_res_keys)}
 
     model.fit(
         data_dir=str(dataset_root),
@@ -505,7 +522,7 @@ def _evaluate_stage_models(
                 weights_path=weights_path,
                 scale="n",
                 res_key=str(args.res_key),
-                res_keys=tuple(str(args.mr_res_keys).split(",")),
+                res_keys=_parse_res_keys(args.mr_res_keys),
                 preprocessing=str(args.generation_preprocessing),
                 num_classes=len(class_index_to_name),
                 backbone_mode=str(args.mr_backbone_mode),
@@ -730,7 +747,12 @@ def main() -> None:
         raise ValueError(f"Unknown --res-key {args.res_key}. Expected one of {sorted(DEFAULT_RES_HW)}.")
     if not 0.0 < float(args.fit_train_ratio) < 1.0:
         raise ValueError("--fit-train-ratio must be in (0, 1).")
-    for key in tuple(args.mr_res_keys.split(",")):
+    mr_res_keys = _parse_res_keys(args.mr_res_keys)
+    if mr_res_keys != DEFAULT_RES_KEYS:
+        _log(f"MR resolution order override: {mr_res_keys}")
+    else:
+        _log(f"MR resolution order: {mr_res_keys}")
+    for key in mr_res_keys:
         if key not in DEFAULT_RES_HW:
             raise ValueError(f"Unknown MR resolution key {key}. Expected one of {sorted(DEFAULT_RES_HW)}.")
     train_snr_values = _snr_sequence(args.train_snr_start, args.train_snr_end, args.train_snr_step)
