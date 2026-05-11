@@ -36,6 +36,10 @@ outputs/
 logs/
 *.log
 
+# Local ICML response drafts
+icml_reviewer_responses/
+icml_reviewer_responses_new/
+
 # Editors
 .idea/
 .vscode/
