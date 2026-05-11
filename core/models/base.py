@@ -210,22 +210,22 @@ class BaseModel(nn.Module):
                 verbose=0
             )
 
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(f"# Model: {model.__class__.__name__}\n")
                 f.write(f"# Device: {model.device}\n")
                 f.write(str(model_summary))
 
-            print(f"[📄] Model summary saved to {path}")
+            print(f"[summary] Model summary saved to {path}")
 
         except Exception as e:
             # Fallback : print str(model)
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(f"# Model: {model.__class__.__name__}\n")
                 f.write(f"# Device: {model.device}\n")
                 f.write(str(model))
-                f.write(f"\n\n⚠️ torchinfo.summary failed: {e}")
+                f.write(f"\n\ntorchinfo.summary failed: {e}")
 
-            print(f"[⚠] Fallback model summary saved to {path}")
+            print(f"[warning] Fallback model summary saved to {path}")
 
     def _check_dataset_dirs(self, data_dir, split, dataset_type):
         data_path = os.path.join(data_dir, split, "data")
