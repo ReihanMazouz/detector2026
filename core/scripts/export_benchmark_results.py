@@ -11,6 +11,7 @@ from typing import Any, Iterable
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_PARENT = REPO_ROOT.parent
@@ -155,9 +156,7 @@ def _profile_model(model: torch.nn.Module, sample_imgs: Any, device: torch.devic
     return {
         "params": int(params),
         "thop_params": int(thop_params),
-        "macs": macs,
         "flops": int(2 * macs),
-        "attention_extra_macs": int(extra_macs),
     }
 
 
@@ -214,40 +213,104 @@ def _metric_path_from_row(run_dir: Path, row: dict[str, str]) -> Path | None:
     return path if path.is_file() else None
 
 
-def _latest_existing_metrics_path(run_dir: Path) -> Path | None:
+def _existing_metrics_paths(run_dir: Path) -> list[Path]:
+    paths: list[Path] = []
     rows = _read_csv_rows(run_dir / "train_log.csv")
-    for row in reversed(rows):
+    for row in rows:
         path = _metric_path_from_row(run_dir, row)
         if path is not None:
-            return path
+            paths.append(path)
 
     metrics_dir = run_dir / "metrics"
-    if not metrics_dir.is_dir():
+    if metrics_dir.is_dir():
+        paths.extend(sorted(metrics_dir.glob("metrics_epoch_*.json")))
+
+    unique_paths: list[Path] = []
+    seen = set()
+    for path in paths:
+        resolved = str(path.resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_paths.append(path)
+    return unique_paths
+
+
+def _metric_value(metrics: dict[str, Any], key: str) -> float | None:
+    map_stats = metrics.get("map_stats") or {}
+    aliases = {
+        "map50": "mAP50",
+        "map50_95": "mAP50:95",
+    }
+    value = map_stats.get(aliases.get(key, key))
+    if value is None:
         return None
-    candidates = sorted(metrics_dir.glob("metrics_epoch_*.json"))
-    return candidates[-1] if candidates else None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
-def _load_existing_metrics(run_dir: Path) -> tuple[dict[str, Any], Path | None]:
-    path = _latest_existing_metrics_path(run_dir)
-    if path is None:
-        return {}, None
-    return json.loads(path.read_text(encoding="utf-8")), path
+def _load_best_existing_metrics(
+    run_dir: Path,
+    selection: str,
+) -> tuple[dict[str, Any], Path | None, dict[str, Any]]:
+    records = []
+    for path in _existing_metrics_paths(run_dir):
+        try:
+            metrics = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        records.append(
+            {
+                "path": path,
+                "metrics": metrics,
+                "map50": _metric_value(metrics, "map50"),
+                "map50_95": _metric_value(metrics, "map50_95"),
+            }
+        )
+
+    if not records:
+        return {}, None, {}
+
+    best_map50 = max((record for record in records if record["map50"] is not None), key=lambda r: r["map50"], default=None)
+    best_map50_95 = max(
+        (record for record in records if record["map50_95"] is not None),
+        key=lambda r: r["map50_95"],
+        default=None,
+    )
+
+    if selection == "best-map50":
+        selected = best_map50 or best_map50_95 or records[-1]
+    elif selection == "latest":
+        selected = records[-1]
+    else:
+        selected = best_map50_95 or best_map50 or records[-1]
+
+    summary = {
+        "num_metrics_json": len(records),
+        "best_map50": None if best_map50 is None else best_map50["map50"],
+        "best_map50_metrics_json": "" if best_map50 is None else str(best_map50["path"]),
+        "best_map50_95": None if best_map50_95 is None else best_map50_95["map50_95"],
+        "best_map50_95_metrics_json": "" if best_map50_95 is None else str(best_map50_95["path"]),
+        "selected_metric": selection,
+    }
+    return selected["metrics"], selected["path"], summary
 
 
 def _metric_model_info(metrics: dict[str, Any]) -> dict[str, int | None]:
     info = metrics.get("model_info") or {}
     params = info.get("params")
-    flops = info.get("flops")
     macs = info.get("macs")
-    if macs is None and flops is not None:
-        macs = int(flops)
-        flops = int(2 * macs)
-    elif flops is None and macs is not None:
-        flops = int(2 * macs)
+    flops = info.get("flops")
+    if macs is not None:
+        flops = 2 * int(macs)
+    elif flops is not None:
+        # Historical training metrics store thop.profile's first return value
+        # under "flops", but thop returns MACs. Export true FLOPs.
+        flops = 2 * int(flops)
     return {
         "params": None if params is None else int(params),
-        "macs": None if macs is None else int(macs),
         "flops": None if flops is None else int(flops),
     }
 
@@ -361,6 +424,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-metrics", action="store_true", help="Only compute params/FLOPs/latency.")
     parser.add_argument("--skip-latency", action="store_true")
     parser.add_argument(
+        "--metrics-selection",
+        choices=("best-map50-95", "best-map50", "latest"),
+        default="best-map50-95",
+        help="Metrics JSON used for curves such as recall vs SNR. Scalar mAP columns always use their best value.",
+    )
+    parser.add_argument(
         "--profile-missing-cost",
         action="store_true",
         help="Compute params/FLOPs with thop only when they are absent from saved metrics.",
@@ -394,36 +463,54 @@ def main() -> int:
     class_index_to_name = load_class_index_to_name(data_dir)
     rows: list[dict[str, Any]] = []
 
-    for job in jobs:
+    print(f"[info] data_dir={data_dir}", flush=True)
+    print(f"[info] weights_root={weights_root}", flush=True)
+    print(f"[info] output_dir={output_dir}", flush=True)
+    print(f"[info] jobs={len(jobs)} | batch_size={args.batch_size}", flush=True)
+
+    for job in tqdm(jobs, desc="Export benchmark", unit="model"):
         checkpoint = weights_root / job.output_dir_name / args.checkpoint_name
         if not checkpoint.is_file():
-            print(f"[skip] missing checkpoint: {checkpoint}", flush=True)
+            tqdm.write(f"[skip] {job.label}: missing checkpoint {checkpoint}")
             continue
 
+        tqdm.write(f"[model] {job.label}")
         run_dir = checkpoint.parent
         metrics: dict[str, Any] = {}
         metrics_path: Path | None = None
         if not args.skip_metrics:
-            metrics, metrics_path = _load_existing_metrics(run_dir)
+            metrics, metrics_path, metrics_summary = _load_best_existing_metrics(run_dir, args.metrics_selection)
+            if metrics_path is None:
+                tqdm.write("  [metrics] no saved metrics found")
+            else:
+                tqdm.write(
+                    "  [metrics] selected "
+                    f"{metrics_path} ({args.metrics_selection}, scanned={metrics_summary.get('num_metrics_json')})"
+                )
+        else:
+            metrics_summary = {}
 
         device = torch.device(args.device if torch.cuda.is_available() or not str(args.device).startswith("cuda") else "cpu")
+        tqdm.write(f"  [load] checkpoint on {device}")
         model = job.model_builder(str(weights_root / job.output_dir_name))
         model.load_weights(str(checkpoint), device=device, eval_mode=True)
         model.to(device).eval()
 
+        tqdm.write("  [data] building dataloader and reading one batch")
         loader = _build_loader(job, data_dir, args.split, args.batch_size, args.preprocessing, args.num_workers)
         sample_imgs = next(iter(loader))[0]
         metric_cost = _metric_model_info(metrics)
         profile_info: dict[str, int | None] = {
             "params": metric_cost["params"],
             "flops": metric_cost["flops"],
-            "macs": metric_cost["macs"],
         }
-        if args.profile_missing_cost and any(profile_info.get(key) is None for key in ("params", "flops", "macs")):
+        if args.profile_missing_cost and any(profile_info.get(key) is None for key in ("params", "flops")):
+            tqdm.write("  [profile] computing missing params/FLOPs")
             profile_info.update(_profile_model(model, sample_imgs, device))
 
         if (not args.skip_metrics) and (not metrics) and args.recompute_missing_metrics:
             metrics_path = output_dir / "metrics" / f"{job.output_dir_name}.json"
+            tqdm.write("  [metrics] recomputing missing full metrics")
             metrics = _load_or_compute_metrics(
                 model=model,
                 loader=loader,
@@ -435,12 +522,21 @@ def main() -> int:
                 class_index_to_name=class_index_to_name,
             )
             metric_cost = _metric_model_info(metrics)
-            for key in ("params", "flops", "macs"):
+            for key in ("params", "flops"):
                 if profile_info.get(key) is None:
                     profile_info[key] = metric_cost[key]
+            metrics_summary = {
+                "num_metrics_json": 1,
+                "best_map50": _metric_value(metrics, "map50"),
+                "best_map50_metrics_json": str(metrics_path),
+                "best_map50_95": _metric_value(metrics, "map50_95"),
+                "best_map50_95_metrics_json": str(metrics_path),
+                "selected_metric": "recomputed",
+            }
 
         lat_cpu = lat_gpu = None
         if not args.skip_latency:
+            tqdm.write("  [latency] CPU")
             cpu_model = job.model_builder(str(weights_root / job.output_dir_name))
             cpu_model.load_weights(str(checkpoint), device="cpu", eval_mode=True)
             cpu_model.to("cpu").eval()
@@ -448,9 +544,16 @@ def main() -> int:
                 cpu_model, sample_imgs, torch.device("cpu"), args.warmup, args.latency_iters
             )
             if torch.cuda.is_available():
+                tqdm.write("  [latency] GPU")
                 lat_gpu = _mean_latency_seconds(model, sample_imgs, device, args.warmup, args.latency_iters)
 
         map_stats = metrics.get("map_stats", {})
+        map50 = metrics_summary.get("best_map50")
+        map50_95 = metrics_summary.get("best_map50_95")
+        if map50 is None:
+            map50 = map_stats.get("mAP50")
+        if map50_95 is None:
+            map50_95 = map_stats.get("mAP50:95")
         row = {
             "model": job.label,
             "run_dir": str(run_dir),
@@ -460,21 +563,24 @@ def main() -> int:
             "resolutions": _resolution_label(job),
             "params": profile_info["params"],
             "flops": profile_info["flops"],
-            "macs": profile_info["macs"],
             "params_m": None if profile_info["params"] is None else round(profile_info["params"] / 1e6, 4),
             "flops_g": None if profile_info["flops"] is None else round(profile_info["flops"] / 1e9, 4),
-            "map50": map_stats.get("mAP50"),
-            "map50_95": map_stats.get("mAP50:95"),
+            "map50": map50,
+            "map50_95": map50_95,
             "latency_cpu_s_per_batch": lat_cpu,
             "latency_gpu_s_per_batch": lat_gpu,
             "latency_cpu_ms_per_sample": None if lat_cpu is None else 1000.0 * lat_cpu / args.batch_size,
             "latency_gpu_ms_per_sample": None if lat_gpu is None else 1000.0 * lat_gpu / args.batch_size,
             "batch_size": args.batch_size,
             "metrics_json": "" if metrics_path is None else str(metrics_path),
+            "num_metrics_json": metrics_summary.get("num_metrics_json"),
+            "selected_metric": metrics_summary.get("selected_metric"),
+            "best_map50_metrics_json": metrics_summary.get("best_map50_metrics_json"),
+            "best_map50_95_metrics_json": metrics_summary.get("best_map50_95_metrics_json"),
         }
         row.update(_recall_snr_columns(metrics))
         rows.append(row)
-        print(f"[done] {job.label}", flush=True)
+        tqdm.write(f"  [done] {job.label}")
 
         del model
         if "cpu_model" in locals():
