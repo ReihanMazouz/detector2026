@@ -454,16 +454,14 @@ class BaseModel(nn.Module):
         logger = MetricsLogger(log_path)
 
         eval_runner = None
-        extra_headers = EvalRunner(
-            output_dir=self.output_dir,
-            cfg=EvalConfig(iou_thresh=0.5, fa_target=0.01, img_size=img_size),
-        ).extra_headers()
+        extra_headers = []
         if run_full_eval:
             eval_runner = EvalRunner(
                 output_dir=self.output_dir,
                 cfg=EvalConfig(iou_thresh=0.5, fa_target=0.01, img_size=img_size),
                 class_index_to_name=load_class_index_to_name(data_dir),
             )
+            extra_headers = eval_runner.extra_headers()
 
         # ---------------- opti & loss --------------------
         optimizer = optim.Adam(self.parameters(), lr=lr)
@@ -647,7 +645,7 @@ class BaseModel(nn.Module):
                 result = {
                     "did_eval": False,
                     "extra_headers": extra_headers,
-                    "extra_values": ev,
+                    "extra_values": ev if run_full_eval else [],
                     "json_path": None,
                     "full_metrics": None,
                 }
@@ -699,8 +697,9 @@ class BaseModel(nn.Module):
 
             if (epoch % plot_every == 0) or (epoch == epochs):
                 TrainingPlots.plot_losses(log_path, save_path=os.path.join(self.output_dir, "loss_curves.png"))
-                TrainingPlots.plot_maps(log_path,   save_path=os.path.join(self.output_dir, "map_curves.png"))
-                TrainingPlots.plot_avg_recalls(log_path, save_path=os.path.join(self.output_dir, "avg_recall_curves.png"))
+                if run_full_eval:
+                    TrainingPlots.plot_maps(log_path,   save_path=os.path.join(self.output_dir, "map_curves.png"))
+                    TrainingPlots.plot_avg_recalls(log_path, save_path=os.path.join(self.output_dir, "avg_recall_curves.png"))
 
             if is_best_monitor:
                 self._best_monitor_value = monitor_value

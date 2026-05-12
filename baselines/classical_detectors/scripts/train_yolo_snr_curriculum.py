@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import inspect
 import os
 import shutil
 import sys
@@ -512,8 +513,20 @@ def _diagonal_rows(rows: list[dict]) -> list[dict]:
 def _deep_model_spec(**kwargs) -> DeepModelSpec:
     supported_fields = set(getattr(DeepModelSpec, "__dataclass_fields__", {}))
     if not supported_fields:
-        return DeepModelSpec(**kwargs)
-    return DeepModelSpec(**{key: value for key, value in kwargs.items() if key in supported_fields})
+        signature = inspect.signature(DeepModelSpec)
+        accepts_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+        supported_fields = set(signature.parameters) if not accepts_kwargs else set(kwargs)
+    filtered = {key: value for key, value in kwargs.items() if key in supported_fields}
+    try:
+        return DeepModelSpec(**filtered)
+    except TypeError as exc:
+        message = str(exc)
+        unexpected = "unexpected keyword argument "
+        if unexpected not in message:
+            raise
+        bad_key = message.split(unexpected, 1)[1].strip().strip("'\"")
+        filtered.pop(bad_key, None)
+        return DeepModelSpec(**filtered)
 
 
 def _evaluate_stage_models(
