@@ -278,7 +278,8 @@ class BaseModel(nn.Module):
         persistent_workers=True,
         full_eval_every=1,
         save_last_every=5,
-        monitor="val_loss"):
+        monitor="val_loss",
+        run_full_eval=True):
         """
         Fonction d'apprentissage du modèle.
         """
@@ -290,11 +291,14 @@ class BaseModel(nn.Module):
         full_eval_every = max(1, int(full_eval_every))
         save_last_every = max(1, int(save_last_every))
         plot_every = full_eval_every
+        run_full_eval = bool(run_full_eval)
         monitor = str(monitor).strip()
         if monitor.lower() == "map50:95":
             monitor = "map50_95"
         elif monitor.lower() == "map50:50":
             monitor = "map50"
+        if not run_full_eval and monitor not in {"val_loss", "train_loss"}:
+            raise ValueError("run_full_eval=False only supports monitor='val_loss' or monitor='train_loss'.")
         monitor_mode = "min" if "loss" in monitor.lower() else "max"
 
         self.save_model_summary(self, self.output_dir)
@@ -424,6 +428,7 @@ class BaseModel(nn.Module):
             f"[ℹ] Training cadence | full_eval_every={full_eval_every} | "
             f"plot_every={plot_every} | save_last_every={save_last_every}"
         )
+        print(f"[ℹ] Full detection metrics during training | {'enabled' if run_full_eval else 'disabled'}")
         print(f"[ℹ] Eval image size | {img_size}")
         print(f"[ℹ] Monitor | {monitor} ({monitor_mode})")
 
@@ -448,12 +453,17 @@ class BaseModel(nn.Module):
 
         logger = MetricsLogger(log_path)
 
-        eval_runner = EvalRunner(
+        eval_runner = None
+        extra_headers = EvalRunner(
             output_dir=self.output_dir,
             cfg=EvalConfig(iou_thresh=0.5, fa_target=0.01, img_size=img_size),
-            class_index_to_name=load_class_index_to_name(data_dir),
-        )
-        extra_headers = eval_runner.extra_headers()
+        ).extra_headers()
+        if run_full_eval:
+            eval_runner = EvalRunner(
+                output_dir=self.output_dir,
+                cfg=EvalConfig(iou_thresh=0.5, fa_target=0.01, img_size=img_size),
+                class_index_to_name=load_class_index_to_name(data_dir),
+            )
 
         # ---------------- opti & loss --------------------
         optimizer = optim.Adam(self.parameters(), lr=lr)
@@ -622,9 +632,12 @@ class BaseModel(nn.Module):
                 monitor_value = val_loss
 
             should_run_full_eval = (
-                (epoch % full_eval_every == 0)
-                or (epoch == epochs)
-                or (monitor == "val_loss" and not hasattr(self, "_best_monitor_value"))
+                run_full_eval
+                and (
+                    (epoch % full_eval_every == 0)
+                    or (epoch == epochs)
+                    or (monitor == "val_loss" and not hasattr(self, "_best_monitor_value"))
+                )
             )
             if should_run_full_eval:
                 result = eval_runner.run(epoch=epoch, model=self, val_loader=val_loader)

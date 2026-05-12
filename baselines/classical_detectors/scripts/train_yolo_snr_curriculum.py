@@ -379,6 +379,7 @@ def _train_model_job(
         full_eval_every=int(args.full_eval_every),
         save_last_every=int(args.save_last_every),
         monitor=args.monitor,
+        run_full_eval=bool(args.train_full_eval),
     )
     best_path = job.output_dir / "best.pt"
     last_path = job.output_dir / "last.pt"
@@ -453,6 +454,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--monitor", default="val_loss")
     parser.add_argument("--full-eval-every", type=int, default=1)
+    parser.add_argument(
+        "--train-full-eval",
+        action="store_true",
+        help="Run full detection metrics during training epochs. By default, curriculum training uses validation loss only.",
+    )
     parser.add_argument("--save-last-every", type=int, default=5)
     parser.add_argument("--pfa", type=float, default=1e-2)
     parser.add_argument("--noise-trials", type=int, default=1000)
@@ -503,6 +509,13 @@ def _diagonal_rows(rows: list[dict]) -> list[dict]:
     ]
 
 
+def _deep_model_spec(**kwargs) -> DeepModelSpec:
+    supported_fields = set(getattr(DeepModelSpec, "__dataclass_fields__", {}))
+    if not supported_fields:
+        return DeepModelSpec(**kwargs)
+    return DeepModelSpec(**{key: value for key, value in kwargs.items() if key in supported_fields})
+
+
 def _evaluate_stage_models(
     *,
     args: argparse.Namespace,
@@ -510,13 +523,19 @@ def _evaluate_stage_models(
     stage_results: list[dict],
     class_index_to_name: dict[int, str],
 ) -> tuple[list[dict], list[dict]]:
+    class_index_to_name_path = Path(args.output_dir) / "class_index_to_name.json"
+    class_index_to_name_path.write_text(
+        json.dumps({str(key): value for key, value in class_index_to_name.items()}, indent=2),
+        encoding="utf-8",
+    )
+
     eval_specs = []
     for result in stage_results:
         weights_path = Path(str(result.get("best_path") or result.get("transfer_path") or result.get("last_path") or ""))
         if not weights_path.is_file():
             raise FileNotFoundError(f"Missing checkpoint for evaluation: {weights_path}")
         eval_specs.append(
-            DeepModelSpec(
+            _deep_model_spec(
                 name=f"{result['name']}_train_snr_{float(train_snr):+06.1f}",
                 family=str(result["family"]),
                 weights_path=weights_path,
@@ -527,6 +546,7 @@ def _evaluate_stage_models(
                 num_classes=len(class_index_to_name),
                 backbone_mode=str(args.mr_backbone_mode),
                 outfusion_channels_mult=int(args.outfusion_channels_mult),
+                class_index_to_name_path=class_index_to_name_path,
                 class_index_to_name=class_index_to_name,
             )
         )
