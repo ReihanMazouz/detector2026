@@ -79,6 +79,7 @@ class DeepModelSpec:
     backbone_mode: str = "TFSep_pyramid"
     outfusion_channels_mult: int = 1
     class_index_to_name_path: Path | None = None
+    class_index_to_name: dict[int, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -262,6 +263,9 @@ def _load_class_index_to_name_file(path: Path) -> dict[int, str]:
 
 
 def _resolve_class_index_to_name(spec: DeepModelSpec) -> dict[int, str]:
+    if spec.class_index_to_name is not None:
+        return {int(key): str(value) for key, value in spec.class_index_to_name.items()}
+
     if spec.class_index_to_name_path is not None:
         mapping = _load_class_index_to_name_file(Path(spec.class_index_to_name_path))
         if mapping:
@@ -414,6 +418,20 @@ class _DeepDetector:
                 input_hw=res_hw,
             )
             self.input_res_keys = (spec.res_key,)
+        elif spec.family == "tf_attn_yolo":
+            from core.models.tf_attn_yolo import TF_Attn_Yolo
+
+            res_hw = DEFAULT_RES_HW[spec.res_key]
+            self.model = TF_Attn_Yolo(
+                output_dir=str(spec.weights_path.parent),
+                num_classes=spec.num_classes,
+                reg_max=spec.reg_max,
+                device=str(self.device),
+                input_canals=input_channels,
+                width_mult=YOLO11_WIDTH_MULT[spec.scale],
+                input_hw=res_hw,
+            )
+            self.input_res_keys = (spec.res_key,)
         elif spec.family == "mr_yolo":
             from core.models.mr_yolo import MR_YOLO
 
@@ -431,7 +449,7 @@ class _DeepDetector:
             )
             self.input_res_keys = tuple(spec.res_keys)
         else:
-            raise ValueError("Deep model family must be 'yolov11' or 'mr_yolo'.")
+            raise ValueError("Deep model family must be 'yolov11', 'tf_attn_yolo', or 'mr_yolo'.")
 
         if not spec.weights_path.is_file():
             raise FileNotFoundError(f"Missing weights for {spec.name}: {spec.weights_path}")
@@ -723,7 +741,7 @@ def run_deep_waveform_snr_sweep(config: DeepWaveformSweepConfig) -> Dict[str, An
             "model_config": {
                 "scale": spec.scale,
                 "width_mult": MR_WIDTH_MULT[spec.scale] if spec.family == "mr_yolo" else YOLO11_WIDTH_MULT[spec.scale],
-                "res_key": spec.res_key if spec.family == "yolov11" else None,
+                "res_key": spec.res_key if spec.family in {"yolov11", "tf_attn_yolo"} else None,
                 "res_keys": list(spec.res_keys) if spec.family == "mr_yolo" else None,
                 "backbone_mode": spec.backbone_mode if spec.family == "mr_yolo" else None,
                 "outfusion_channels_mult": spec.outfusion_channels_mult if spec.family == "mr_yolo" else None,

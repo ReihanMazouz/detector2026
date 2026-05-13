@@ -4,6 +4,7 @@ import argparse
 import copy
 import csv
 import inspect
+import json
 import os
 import shutil
 import sys
@@ -64,6 +65,11 @@ DEFAULT_BENCHMARK_MR_RES_KEYS = DEFAULT_RES_KEYS
 DEFAULT_YOLO_VN_WIDTH_MULT = 0.25
 DEFAULT_MR_VN_WIDTH_MULT = 0.25
 DEFAULT_FIT_TRAIN_RATIO = 0.9
+DEFAULT_MODEL_FAMILIES = {
+    "yolov11vn": "yolov11",
+    "tf_attn_yolovn": "tf_attn_yolo",
+    "mr_yolovn": "mr_yolo",
+}
 
 
 def _log(message: str) -> None:
@@ -212,6 +218,21 @@ def _parse_res_keys(raw: str) -> tuple[str, ...]:
     if duplicates:
         raise ValueError(f"Duplicate MR resolution key(s): {duplicates}.")
     return res_keys
+
+
+def _parse_model_names(raw: str) -> tuple[str, ...]:
+    if str(raw).strip().lower() in {"", "all"}:
+        return tuple(DEFAULT_MODEL_FAMILIES)
+    model_names = tuple(item.strip() for item in str(raw).split(",") if item.strip())
+    if not model_names:
+        raise ValueError("At least one model must be selected.")
+    unknown = [name for name in model_names if name not in DEFAULT_MODEL_FAMILIES]
+    if unknown:
+        raise ValueError(f"Unknown model name(s) {unknown}. Expected one of {list(DEFAULT_MODEL_FAMILIES)}.")
+    duplicates = sorted({name for name in model_names if model_names.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"Duplicate model name(s): {duplicates}.")
+    return model_names
 
 
 def _benchmark_weight_defaults(root: Path, res_key: str) -> dict[str, Path]:
@@ -431,6 +452,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--init-yolov11-weights", default=None, help="Initial YOLOv11 weights. Default: benchmark yolov11n best.pt.")
     parser.add_argument("--init-tf-attn-weights", default=None, help="Initial TF-Attn-YOLO weights. Default: benchmark tf_attn_yolon best.pt.")
     parser.add_argument("--init-mr-yolo-weights", default=None, help="Initial MR-YOLO weights. Default: benchmark mr_yolo_n all-res best.pt.")
+    parser.add_argument(
+        "--models",
+        default="all",
+        help=(
+            "Comma-separated model names to train/evaluate. "
+            f"Use any of {','.join(DEFAULT_MODEL_FAMILIES)} or 'all'."
+        ),
+    )
     parser.add_argument("--res-key", default="cfg512")
     parser.add_argument("--mr-res-keys", default=",".join(DEFAULT_RES_KEYS))
     parser.add_argument(
@@ -467,7 +496,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-seed", type=int, default=444)
     parser.add_argument("--eval-batch-size", type=int, default=None)
     parser.add_argument("--eval-snr-start", type=int, default=-30)
-    parser.add_argument("--eval-snr-end", type=int, default=30)
+    parser.add_argument("--eval-snr-end", type=int, default=0)
     parser.add_argument("--eval-snr-step", type=int, default=1)
     parser.add_argument("--eval-snr-values", default=None, help="Comma-separated override, e.g. '-30,-20,-10,0,10,20,30'.")
     parser.add_argument("--no-plot", action="store_true")
@@ -794,12 +823,9 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     devices = tuple(item.strip() for item in str(args.devices).split(",") if item.strip())
-    model_names = ("yolov11vn", "tf_attn_yolovn", "mr_yolovn")
-    model_families = {
-        "yolov11vn": "yolov11",
-        "tf_attn_yolovn": "tf_attn_yolo",
-        "mr_yolovn": "mr_yolo",
-    }
+    model_names = _parse_model_names(args.models)
+    model_families = DEFAULT_MODEL_FAMILIES
+    _log(f"Selected models: {model_names}")
     model_devices = _assign_devices(model_names, devices)
     benchmark_defaults = _benchmark_weight_defaults(args.benchmark_weights_root, args.res_key)
     initial_weights: dict[str, Path | None] = {
