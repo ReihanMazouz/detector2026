@@ -299,6 +299,33 @@ def _generate_yolo_dataset(
     return class_index_to_name
 
 
+def _load_existing_yolo_dataset(dataset_dir: Path) -> dict[int, str] | None:
+    class_map_path = dataset_dir / "class_index_to_name.json"
+    required_dirs = [
+        dataset_dir / "train" / "data",
+        dataset_dir / "train" / "labels_detect",
+        dataset_dir / "val" / "data",
+        dataset_dir / "val" / "labels_detect",
+    ]
+    if not class_map_path.is_file():
+        return None
+    if any(not path.is_dir() or not any(path.iterdir()) for path in required_dirs):
+        return None
+
+    with class_map_path.open("r", encoding="utf-8") as handle:
+        raw_mapping = json.load(handle)
+    if not isinstance(raw_mapping, dict):
+        return None
+
+    class_index_to_name = {}
+    for key, value in raw_mapping.items():
+        try:
+            class_index_to_name[int(key)] = str(value)
+        except (TypeError, ValueError):
+            return None
+    return class_index_to_name or None
+
+
 @dataclass(frozen=True)
 class ModelJob:
     name: str
@@ -930,15 +957,19 @@ def main() -> None:
             else int(args.scenarios_per_waveform)
         )
         stage_dataset_dir = args.work_dir / f"snr_{train_snr:+04d}"
-        class_index_to_name = _generate_yolo_dataset(
-            output_dir=stage_dataset_dir,
-            snr_db=float(train_snr),
-            seed=seed,
-            scenarios_per_waveform=scenarios_per_waveform,
-            fit_train_ratio=float(args.fit_train_ratio),
-            waveforms=args.waveforms,
-            generation_preprocessing=args.generation_preprocessing,
-        )
+        class_index_to_name = _load_existing_yolo_dataset(stage_dataset_dir)
+        if class_index_to_name is None:
+            class_index_to_name = _generate_yolo_dataset(
+                output_dir=stage_dataset_dir,
+                snr_db=float(train_snr),
+                seed=seed,
+                scenarios_per_waveform=scenarios_per_waveform,
+                fit_train_ratio=float(args.fit_train_ratio),
+                waveforms=args.waveforms,
+                generation_preprocessing=args.generation_preprocessing,
+            )
+        else:
+            _log(f"reusing existing YOLO dataset snr={train_snr} from {stage_dataset_dir}")
         _log(f"stage snr={train_snr} classes={class_index_to_name}")
 
         max_workers = max(1, min(int(args.max_parallel_models), len(pending_jobs)))
