@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sys
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
@@ -420,6 +421,20 @@ def _train_model_job(
     }
 
 
+def _record_training_failure(*, job: ModelJob, train_snr: float, exc: BaseException) -> dict:
+    error_message = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+    _log(f"[{job.name}] failed at train_snr={train_snr}: {type(exc).__name__}: {exc}")
+    print(error_message, flush=True)
+    return {
+        "name": job.name,
+        "family": job.family,
+        "device": job.device,
+        "output_dir": str(job.output_dir),
+        "error_type": type(exc).__name__,
+        "error_message": str(exc),
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train YOLOv11-vn, TF-Attn-YOLO-vn and MR-YOLO-vn with an SNR curriculum.")
     parser.add_argument("--train-snr-start", type=int, default=0)
@@ -710,6 +725,47 @@ def _write_eval_csv(rows: list[dict], output_path: Path) -> None:
             writer.writerow(row)
 
 
+def _load_eval_csv(input_path: Path) -> list[dict]:
+    if not input_path.is_file():
+        return []
+    with input_path.open("r", newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _existing_stage_result(job: ModelJob) -> dict | None:
+    best_path = job.output_dir / "best.pt"
+    last_path = job.output_dir / "last.pt"
+    if not best_path.is_file() and not last_path.is_file():
+        return None
+    transfer_path = last_path if last_path.is_file() else best_path
+    return {
+        "name": job.name,
+        "family": job.family,
+        "device": job.device,
+        "output_dir": str(job.output_dir),
+        "best_path": str(best_path) if best_path.is_file() else None,
+        "last_path": str(last_path) if last_path.is_file() else None,
+        "transfer_path": str(transfer_path),
+    }
+
+
+def _has_stage_eval_rows(rows: list[dict], *, train_snr: float, model_names: set[str]) -> bool:
+    present_models = {
+        str(row["model"])
+        for row in rows
+        if float(row["train_snr"]) == float(train_snr)
+    }
+    return model_names.issubset(present_models)
+
+
+def _drop_stage_rows(rows: list[dict], *, train_snr: float, model_names: set[str]) -> list[dict]:
+    return [
+        row
+        for row in rows
+        if not (float(row["train_snr"]) == float(train_snr) and str(row["model"]) in model_names)
+    ]
+
+
 def _plot_pd_curves(rows: list[dict], output_path: Path) -> None:
     import matplotlib.pyplot as plt
 
@@ -743,33 +799,15 @@ def _plot_pd_curves(rows: list[dict], output_path: Path) -> None:
     plt.close(fig)
 
 
-def _plot_diagonal_pd_by_waveform(rows: list[dict], output_path: Path) -> None:
-    import matplotlib.pyplot as plt
-
-    grouped: dict[tuple[str, str], list[dict]] = {}
-    for row in _diagonal_rows(rows):
-        grouped.setdefault((str(row["model"]), str(row["waveform_label"])), []).append(row)
-
-    fig, axis = plt.subplots(figsize=(11.0, 6.5))
-    for (model_name, waveform_label), items in sorted(grouped.items()):
-        items = sorted(items, key=lambda item: float(item["eval_snr"]))
-        axis.plot(
-            [float(item["eval_snr"]) for item in items],
-            [float(item["pd"]) for item in items],
-            marker="o",
-            linewidth=1.4,
-            markersize=3.0,
-            label=f"{model_name} {waveform_label}",
-        )
-    axis.set_xlabel("Training/evaluation SNR (dB)")
-    axis.set_ylabel("Pd")
-    axis.set_ylim(-0.02, 1.02)
-    axis.grid(True, alpha=0.3)
-    axis.legend(fontsize="x-small", ncol=2)
-    fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+def _plot_pd_curves_by_model(rows: list[dict], output_dir: Path) -> list[Path]:
+    output_paths = []
+    model_names = sorted({str(row["model"]) for row in rows})
+    for model_name in model_names:
+        model_rows = [row for row in rows if str(row["model"]) == model_name]
+        output_path = output_dir / f"yolo_snr_curriculum_pd_vs_snr_{model_name}.png"
+        _plot_pd_curves(model_rows, output_path)
+        output_paths.append(output_path)
+    return output_paths
 
 
 def _plot_diagonal_pd_curves(rows: list[dict], output_path: Path) -> None:
@@ -840,13 +878,51 @@ def main() -> None:
             _log(f"[{model_name}] initial weights not found, training from scratch: {weights_path}")
             initial_weights[model_name] = None
     previous_weights: dict[str, Path | None] = dict(initial_weights)
-    all_eval_rows: list[dict] = []
-    all_waveform_eval_rows: list[dict] = []
+    csv_path = args.output_dir / "yolo_snr_curriculum_pd_characterization.csv"
+    waveform_csv_path = args.output_dir / "yolo_snr_curriculum_pd_characterization_by_waveform.csv"
+    all_eval_rows = _load_eval_csv(csv_path)
+    all_waveform_eval_rows = _load_eval_csv(waveform_csv_path)
+    if all_eval_rows:
+        _log(f"loaded existing evaluation rows={len(all_eval_rows)} from {csv_path}")
+    if all_waveform_eval_rows:
+        _log(f"loaded existing waveform evaluation rows={len(all_waveform_eval_rows)} from {waveform_csv_path}")
 
     for step_index, train_snr in enumerate(train_snr_values):
         seed = int(args.seed_start + step_index)
         if seed > 460:
             raise ValueError(f"Seed {seed} exceeds locked maximum seed 460.")
+
+        jobs = [
+            ModelJob(
+                name=name,
+                family=model_families[name],
+                device=model_devices[name],
+                output_dir=args.output_dir / name / f"snr_{train_snr:+04d}",
+                previous_weights=previous_weights[name],
+            )
+            for name in model_names
+        ]
+
+        stage_results = []
+        pending_jobs = []
+        for job in jobs:
+            existing_result = _existing_stage_result(job)
+            if existing_result is None:
+                pending_jobs.append(job)
+                continue
+            stage_results.append(existing_result)
+            previous_weights[job.name] = Path(str(existing_result["transfer_path"]))
+            _log(f"[{job.name}] reusing existing checkpoint for train_snr={train_snr}: {existing_result['transfer_path']}")
+
+        stage_model_names = {str(result["name"]) for result in stage_results}
+        stage_already_evaluated = bool(stage_results) and _has_stage_eval_rows(
+            all_eval_rows,
+            train_snr=float(train_snr),
+            model_names=stage_model_names,
+        )
+        if not pending_jobs and stage_already_evaluated:
+            _log(f"skipping completed stage train_snr={train_snr}: checkpoints and evaluation already exist")
+            continue
 
         scenarios_per_waveform = (
             int(args.first_snr_scenarios_per_waveform)
@@ -865,82 +941,88 @@ def main() -> None:
         )
         _log(f"stage snr={train_snr} classes={class_index_to_name}")
 
-        jobs = [
-            ModelJob(
-                name=name,
-                family=model_families[name],
-                device=model_devices[name],
-                output_dir=args.output_dir / name / f"snr_{train_snr:+04d}",
-                previous_weights=previous_weights[name],
-            )
-            for name in model_names
-        ]
-
-        max_workers = max(1, min(int(args.max_parallel_models), len(jobs)))
-        stage_results = []
+        max_workers = max(1, min(int(args.max_parallel_models), len(pending_jobs)))
+        stage_failures = []
         if max_workers == 1:
-            for job in jobs:
-                result = _train_model_job(
-                    job=job,
-                    dataset_root=stage_dataset_dir,
-                    class_index_to_name=class_index_to_name,
-                    args=args,
-                )
+            for job in pending_jobs:
+                try:
+                    result = _train_model_job(
+                        job=job,
+                        dataset_root=stage_dataset_dir,
+                        class_index_to_name=class_index_to_name,
+                        args=args,
+                    )
+                except Exception as exc:
+                    stage_failures.append(_record_training_failure(job=job, train_snr=float(train_snr), exc=exc))
+                    continue
                 stage_results.append(result)
                 if result["transfer_path"]:
                     previous_weights[str(result["name"])] = Path(str(result["transfer_path"]))
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [
+                future_to_job = {
                     executor.submit(
                         _train_model_job,
                         job=job,
                         dataset_root=stage_dataset_dir,
                         class_index_to_name=class_index_to_name,
                         args=args,
-                    )
-                    for job in jobs
-                ]
-                for future in as_completed(futures):
-                    result = future.result()
+                    ): job
+                    for job in pending_jobs
+                }
+                for future in as_completed(future_to_job):
+                    job = future_to_job[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        stage_failures.append(_record_training_failure(job=job, train_snr=float(train_snr), exc=exc))
+                        continue
                     stage_results.append(result)
                     if result["transfer_path"]:
                         previous_weights[str(result["name"])] = Path(str(result["transfer_path"]))
 
-        _log(f"evaluating stage train_snr={train_snr} on validation dataset")
-        stage_eval_rows, stage_waveform_eval_rows = _evaluate_stage_models(
-            args=args,
-            train_snr=float(train_snr),
-            stage_results=stage_results,
-            class_index_to_name=class_index_to_name,
-        )
-        all_eval_rows.extend(stage_eval_rows)
-        all_waveform_eval_rows.extend(stage_waveform_eval_rows)
-        csv_path = args.output_dir / "yolo_snr_curriculum_pd_characterization.csv"
+        if stage_failures:
+            failed_names = ", ".join(str(item["name"]) for item in stage_failures)
+            _log(f"stage train_snr={train_snr} failures={len(stage_failures)} models=[{failed_names}]")
+        if not stage_results:
+            _log(f"skipping evaluation for train_snr={train_snr}: no successful model training jobs")
+            continue
+
+        trained_model_names = {str(result["name"]) for result in stage_results}
+        if _has_stage_eval_rows(all_eval_rows, train_snr=float(train_snr), model_names=trained_model_names):
+            _log(f"skipping evaluation for train_snr={train_snr}: existing rows already cover models={sorted(trained_model_names)}")
+        else:
+            _log(f"evaluating stage train_snr={train_snr} on validation dataset")
+            stage_eval_rows, stage_waveform_eval_rows = _evaluate_stage_models(
+                args=args,
+                train_snr=float(train_snr),
+                stage_results=stage_results,
+                class_index_to_name=class_index_to_name,
+            )
+            all_eval_rows = _drop_stage_rows(all_eval_rows, train_snr=float(train_snr), model_names=trained_model_names)
+            all_waveform_eval_rows = _drop_stage_rows(
+                all_waveform_eval_rows,
+                train_snr=float(train_snr),
+                model_names=trained_model_names,
+            )
+            all_eval_rows.extend(stage_eval_rows)
+            all_waveform_eval_rows.extend(stage_waveform_eval_rows)
         _write_eval_csv(all_eval_rows, csv_path)
         _log(f"updated {csv_path}")
         diagonal_csv_path = args.output_dir / "yolo_snr_curriculum_pd_characterization_diagonal.csv"
         _write_eval_csv(_diagonal_rows(all_eval_rows), diagonal_csv_path)
         _log(f"updated {diagonal_csv_path}")
-        waveform_csv_path = args.output_dir / "yolo_snr_curriculum_pd_characterization_by_waveform.csv"
         _write_eval_csv(all_waveform_eval_rows, waveform_csv_path)
         _log(f"updated {waveform_csv_path}")
         diagonal_waveform_csv_path = args.output_dir / "yolo_snr_curriculum_pd_characterization_diagonal_by_waveform.csv"
         _write_eval_csv(_diagonal_rows(all_waveform_eval_rows), diagonal_waveform_csv_path)
         _log(f"updated {diagonal_waveform_csv_path}")
         if not args.no_plot:
-            plot_path = args.output_dir / "yolo_snr_curriculum_pd_vs_snr.png"
-            _plot_pd_curves(all_eval_rows, plot_path)
-            _log(f"updated {plot_path}")
+            for plot_path in _plot_pd_curves_by_model(all_eval_rows, args.output_dir):
+                _log(f"updated {plot_path}")
             diagonal_plot_path = args.output_dir / "yolo_snr_curriculum_pd_diagonal.png"
             _plot_diagonal_pd_curves(all_eval_rows, diagonal_plot_path)
             _log(f"updated {diagonal_plot_path}")
-            waveform_plot_path = args.output_dir / "yolo_snr_curriculum_pd_by_waveform_vs_snr.png"
-            _plot_pd_curves(all_waveform_eval_rows, waveform_plot_path)
-            _log(f"updated {waveform_plot_path}")
-            diagonal_waveform_plot_path = args.output_dir / "yolo_snr_curriculum_pd_diagonal_by_waveform.png"
-            _plot_diagonal_pd_by_waveform(all_waveform_eval_rows, diagonal_waveform_plot_path)
-            _log(f"updated {diagonal_waveform_plot_path}")
 
         if stage_dataset_dir.exists():
             shutil.rmtree(stage_dataset_dir)
