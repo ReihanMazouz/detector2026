@@ -86,6 +86,24 @@ def _snr_sequence(start: int, end: int, step: int) -> list[int]:
     return list(range(start, end + 1, step))
 
 
+def _snr_windows(start: int, end: int, width_db: int) -> list[tuple[int, int]]:
+    if width_db <= 0:
+        raise ValueError("SNR window width must be strictly positive.")
+    if start < end:
+        raise ValueError("Range curriculum currently expects --train-snr-start >= --train-snr-end.")
+    windows = []
+    upper = int(start)
+    while upper > int(end):
+        lower = max(int(end), upper - int(width_db))
+        windows.append((lower, upper))
+        upper = lower
+    return windows
+
+
+def _stage_tag(snr_min_db: int, snr_max_db: int) -> str:
+    return f"snr_{snr_min_db:+04d}_to_{snr_max_db:+04d}"
+
+
 def _draw_fp_with_bw(rng: np.random.Generator, bw: float, fp_min: float, fp_max: float) -> float:
     low = fp_min + bw / 2.0
     high = fp_max - bw / 2.0
@@ -155,13 +173,15 @@ def _sample_base_waveform(*, rng: np.random.Generator, label: str, definition: d
     return waveform
 
 
-def _build_fixed_snr_scenarios(
+def _build_snr_range_scenarios(
     *,
     signal_defs: dict,
     scenarios_per_waveform: int,
-    snr_db: float,
+    snr_values_db: tuple[float, ...],
     seed: int,
 ) -> list[list[dict]]:
+    if not snr_values_db:
+        raise ValueError("At least one training SNR value is required.")
     scenarios: list[list[dict]] = []
     active_waveforms = list(signal_defs["waveforms"].items())
     group_id = 0
@@ -173,6 +193,7 @@ def _build_fixed_snr_scenarios(
             rng = np.random.default_rng(scenario_seed)
             base_waveform = _sample_base_waveform(rng=rng, label=waveform_label, definition=definition)
             waveform_type = str(base_waveform["waveform_type"])
+            snr_db = float(snr_values_db[scenario_index % len(snr_values_db)])
 
             waveform = copy.deepcopy(base_waveform)
             waveform["waveform_id"] = f"{waveform_label}_g{group_id:05d}_snr{snr_db:+05.1f}"
@@ -257,7 +278,7 @@ def _optional_path(value: str | Path | None) -> Path | None:
 def _generate_yolo_dataset(
     *,
     output_dir: Path,
-    snr_db: float,
+    snr_values_db: tuple[float, ...],
     seed: int,
     scenarios_per_waveform: int,
     fit_train_ratio: float,
@@ -270,15 +291,15 @@ def _generate_yolo_dataset(
 
     signal_defs = _build_single_emitter_signal_defs(_parse_waveforms(waveforms))
     class_index_to_name = build_class_index_to_name(signal_defs)
-    scenarios = _build_fixed_snr_scenarios(
+    scenarios = _build_snr_range_scenarios(
         signal_defs=signal_defs,
         scenarios_per_waveform=scenarios_per_waveform,
-        snr_db=snr_db,
+        snr_values_db=snr_values_db,
         seed=seed,
     )
 
     _log(
-        f"generating YOLO dataset snr={snr_db:g} seed={seed} "
+        f"generating YOLO dataset snr_values={list(snr_values_db)} seed={seed} "
         f"samples={len(scenarios)} fit_train_ratio={fit_train_ratio:g}"
     )
     generate_and_store_spectrum_multi(
@@ -466,9 +487,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train YOLOv11-vn, TF-Attn-YOLO-vn and MR-YOLO-vn with an SNR curriculum.")
     parser.add_argument("--train-snr-start", type=int, default=0)
     parser.add_argument("--train-snr-end", type=int, default=-30)
-    parser.add_argument("--train-snr-step", type=int, default=1)
+    parser.add_argument(
+        "--train-snr-window-db",
+        type=int,
+        default=5,
+        help="Width of each descending training SNR window in dB, e.g. [-5, 0], then [-10, -5].",
+    )
     parser.add_argument("--seed-start", type=int, default=400)
-    parser.add_argument("--scenarios-per-waveform", type=int, default=500)
+    parser.add_argument("--scenarios-per-waveform", type=int, default=2500)
     parser.add_argument(
         "--fit-train-ratio",
         type=float,
@@ -478,7 +504,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--first-snr-scenarios-per-waveform",
         type=int,
-        default=1000,
+        default=5000,
         help="Number of scenarios per waveform for the first SNR stage. Later stages use --scenarios-per-waveform.",
     )
     parser.add_argument("--waveforms", default="all")
@@ -604,6 +630,7 @@ def _evaluate_stage_models(
     *,
     args: argparse.Namespace,
     train_snr: float,
+    train_snr_max: float,
     stage_results: list[dict],
     class_index_to_name: dict[int, str],
 ) -> tuple[list[dict], list[dict]]:
@@ -675,6 +702,7 @@ def _evaluate_stage_models(
                 {
                     "model": result["name"],
                     "train_snr": float(train_snr),
+                    "train_snr_max": float(train_snr_max),
                     "eval_snr": float(eval_snr),
                     "pd": float(pd_weighted) if pd_weighted is not None else float("nan"),
                     "n_samples": n_samples,
@@ -709,6 +737,7 @@ def _evaluate_stage_models(
                         "model": result["name"],
                         "waveform_label": waveform_label,
                         "train_snr": float(train_snr),
+                        "train_snr_max": float(train_snr_max),
                         "eval_snr": float(eval_snr),
                         "pd": float(waveform_pd) if waveform_pd is not None else float("nan"),
                         "n_samples": waveform_n_samples,
@@ -732,6 +761,7 @@ def _write_eval_csv(rows: list[dict], output_path: Path) -> None:
     fieldnames += [
         "model",
         "train_snr",
+        "train_snr_max",
         "eval_snr",
         "pd",
         "n_samples",
@@ -804,9 +834,14 @@ def _plot_pd_curves(rows: list[dict], output_path: Path) -> None:
     fig, axis = plt.subplots(figsize=(12.0, 7.0) if has_waveform_labels else (11.0, 6.5))
     for (model_name, waveform_label, train_snr), items in sorted(grouped.items()):
         items = sorted(items, key=lambda item: float(item["eval_snr"]))
-        label = f"{model_name} train {train_snr:g} dB"
+        train_snr_max = items[0].get("train_snr_max")
+        if train_snr_max is not None and float(train_snr_max) != float(train_snr):
+            train_label = f"[{train_snr:g}, {float(train_snr_max):g}] dB"
+        else:
+            train_label = f"{train_snr:g} dB"
+        label = f"{model_name} train {train_label}"
         if waveform_label is not None:
-            label = f"{model_name} {waveform_label} train {train_snr:g} dB"
+            label = f"{model_name} {waveform_label} train {train_label}"
         axis.plot(
             [float(item["eval_snr"]) for item in items],
             [float(item["pd"]) for item in items],
@@ -882,8 +917,8 @@ def main() -> None:
     for key in mr_res_keys:
         if key not in DEFAULT_RES_HW:
             raise ValueError(f"Unknown MR resolution key {key}. Expected one of {sorted(DEFAULT_RES_HW)}.")
-    train_snr_values = _snr_sequence(args.train_snr_start, args.train_snr_end, args.train_snr_step)
-    if len(train_snr_values) > 61:
+    train_snr_windows = _snr_windows(args.train_snr_start, args.train_snr_end, args.train_snr_window_db)
+    if len(train_snr_windows) > 61:
         raise ValueError("Training SNR sequence is longer than the locked seed range 400..460.")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -914,7 +949,7 @@ def main() -> None:
     if all_waveform_eval_rows:
         _log(f"loaded existing waveform evaluation rows={len(all_waveform_eval_rows)} from {waveform_csv_path}")
 
-    for step_index, train_snr in enumerate(train_snr_values):
+    for step_index, (train_snr_min, train_snr_max) in enumerate(train_snr_windows):
         seed = int(args.seed_start + step_index)
         if seed > 460:
             raise ValueError(f"Seed {seed} exceeds locked maximum seed 460.")
@@ -924,7 +959,7 @@ def main() -> None:
                 name=name,
                 family=model_families[name],
                 device=model_devices[name],
-                output_dir=args.output_dir / name / f"snr_{train_snr:+04d}",
+                output_dir=args.output_dir / name / _stage_tag(train_snr_min, train_snr_max),
                 previous_weights=previous_weights[name],
             )
             for name in model_names
@@ -939,16 +974,22 @@ def main() -> None:
                 continue
             stage_results.append(existing_result)
             previous_weights[job.name] = Path(str(existing_result["transfer_path"]))
-            _log(f"[{job.name}] reusing existing checkpoint for train_snr={train_snr}: {existing_result['transfer_path']}")
+            _log(
+                f"[{job.name}] reusing existing checkpoint for "
+                f"train_snr=[{train_snr_min}, {train_snr_max}]: {existing_result['transfer_path']}"
+            )
 
         stage_model_names = {str(result["name"]) for result in stage_results}
         stage_already_evaluated = bool(stage_results) and _has_stage_eval_rows(
             all_eval_rows,
-            train_snr=float(train_snr),
+            train_snr=float(train_snr_min),
             model_names=stage_model_names,
         )
         if not pending_jobs and stage_already_evaluated:
-            _log(f"skipping completed stage train_snr={train_snr}: checkpoints and evaluation already exist")
+            _log(
+                f"skipping completed stage train_snr=[{train_snr_min}, {train_snr_max}]: "
+                "checkpoints and evaluation already exist"
+            )
             continue
 
         scenarios_per_waveform = (
@@ -956,12 +997,13 @@ def main() -> None:
             if step_index == 0
             else int(args.scenarios_per_waveform)
         )
-        stage_dataset_dir = args.work_dir / f"snr_{train_snr:+04d}"
+        stage_dataset_dir = args.work_dir / _stage_tag(train_snr_min, train_snr_max)
+        train_snr_values_db = tuple(float(value) for value in range(train_snr_min, train_snr_max + 1))
         class_index_to_name = _load_existing_yolo_dataset(stage_dataset_dir)
         if class_index_to_name is None:
             class_index_to_name = _generate_yolo_dataset(
                 output_dir=stage_dataset_dir,
-                snr_db=float(train_snr),
+                snr_values_db=train_snr_values_db,
                 seed=seed,
                 scenarios_per_waveform=scenarios_per_waveform,
                 fit_train_ratio=float(args.fit_train_ratio),
@@ -969,8 +1011,8 @@ def main() -> None:
                 generation_preprocessing=args.generation_preprocessing,
             )
         else:
-            _log(f"reusing existing YOLO dataset snr={train_snr} from {stage_dataset_dir}")
-        _log(f"stage snr={train_snr} classes={class_index_to_name}")
+            _log(f"reusing existing YOLO dataset snr_values={list(train_snr_values_db)} from {stage_dataset_dir}")
+        _log(f"stage snr=[{train_snr_min}, {train_snr_max}] classes={class_index_to_name}")
 
         max_workers = max(1, min(int(args.max_parallel_models), len(pending_jobs)))
         stage_failures = []
@@ -984,7 +1026,7 @@ def main() -> None:
                         args=args,
                     )
                 except Exception as exc:
-                    stage_failures.append(_record_training_failure(job=job, train_snr=float(train_snr), exc=exc))
+                    stage_failures.append(_record_training_failure(job=job, train_snr=float(train_snr_min), exc=exc))
                     continue
                 stage_results.append(result)
                 if result["transfer_path"]:
@@ -1006,7 +1048,7 @@ def main() -> None:
                     try:
                         result = future.result()
                     except Exception as exc:
-                        stage_failures.append(_record_training_failure(job=job, train_snr=float(train_snr), exc=exc))
+                        stage_failures.append(_record_training_failure(job=job, train_snr=float(train_snr_min), exc=exc))
                         continue
                     stage_results.append(result)
                     if result["transfer_path"]:
@@ -1014,26 +1056,36 @@ def main() -> None:
 
         if stage_failures:
             failed_names = ", ".join(str(item["name"]) for item in stage_failures)
-            _log(f"stage train_snr={train_snr} failures={len(stage_failures)} models=[{failed_names}]")
+            _log(
+                f"stage train_snr=[{train_snr_min}, {train_snr_max}] "
+                f"failures={len(stage_failures)} models=[{failed_names}]"
+            )
         if not stage_results:
-            _log(f"skipping evaluation for train_snr={train_snr}: no successful model training jobs")
+            _log(
+                f"skipping evaluation for train_snr=[{train_snr_min}, {train_snr_max}]: "
+                "no successful model training jobs"
+            )
             continue
 
         trained_model_names = {str(result["name"]) for result in stage_results}
-        if _has_stage_eval_rows(all_eval_rows, train_snr=float(train_snr), model_names=trained_model_names):
-            _log(f"skipping evaluation for train_snr={train_snr}: existing rows already cover models={sorted(trained_model_names)}")
+        if _has_stage_eval_rows(all_eval_rows, train_snr=float(train_snr_min), model_names=trained_model_names):
+            _log(
+                f"skipping evaluation for train_snr=[{train_snr_min}, {train_snr_max}]: "
+                f"existing rows already cover models={sorted(trained_model_names)}"
+            )
         else:
-            _log(f"evaluating stage train_snr={train_snr} on validation dataset")
+            _log(f"evaluating stage train_snr=[{train_snr_min}, {train_snr_max}] on validation dataset")
             stage_eval_rows, stage_waveform_eval_rows = _evaluate_stage_models(
                 args=args,
-                train_snr=float(train_snr),
+                train_snr=float(train_snr_min),
+                train_snr_max=float(train_snr_max),
                 stage_results=stage_results,
                 class_index_to_name=class_index_to_name,
             )
-            all_eval_rows = _drop_stage_rows(all_eval_rows, train_snr=float(train_snr), model_names=trained_model_names)
+            all_eval_rows = _drop_stage_rows(all_eval_rows, train_snr=float(train_snr_min), model_names=trained_model_names)
             all_waveform_eval_rows = _drop_stage_rows(
                 all_waveform_eval_rows,
-                train_snr=float(train_snr),
+                train_snr=float(train_snr_min),
                 model_names=trained_model_names,
             )
             all_eval_rows.extend(stage_eval_rows)

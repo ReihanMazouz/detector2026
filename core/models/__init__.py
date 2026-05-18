@@ -1,4 +1,5 @@
 from .yolov11 import YOLOv11
+from .detr import DETR
 from .resnet import (
     ResNet,
     ResNetClassifier,
@@ -12,6 +13,7 @@ from .resnet import (
 
 __all__ = [
     "YOLOv11",
+    "DETR",
     "ResNet",
     "ResNetClassifier",
     "labels_from_yolo_targets",
