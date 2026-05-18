@@ -1023,6 +1023,13 @@ def stats_analysis_with_metrics(
 
     print(f"[INFO] Seuil de confiance sélectionné pour FP ≤ {fa:.3f} : {conf_thresh:.3f}")
     full_metrics["conf_thresh"] = float(conf_thresh)
+    full_metrics["operating_point"] = {
+        "tp_at_conf_thresh": int(sum(1 for d in stats["tp"] if d["score"] >= conf_thresh)),
+        "fp_at_conf_thresh": int(sum(1 for d in stats["fp"] if d["score"] >= conf_thresh)),
+        "fn_total": int(len(stats["fn"])),
+        "tp_raw": int(len(stats["tp"])),
+        "fp_raw": int(len(stats["fp"])),
+    }
 
     recall_snr = recall_per_snr_bin(
         stats,
@@ -1057,7 +1064,7 @@ def stats_analysis_with_metrics(
         iou_thresholds=np.linspace(0, 1, 21),
         to_plot=to_plot,
         class_index_to_name=class_index_to_name,
-        conf_thresh=conf_thresh,
+        conf_thresh=0.0,
     )
     full_metrics["map_stats"] = map_stats
 
