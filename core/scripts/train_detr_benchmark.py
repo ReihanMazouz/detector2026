@@ -45,6 +45,7 @@ def parse_args():
     parser.add_argument("--dim-feedforward", type=int, default=1024)
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--aux-loss-weight", type=float, default=1.0)
+    parser.add_argument("--eos-coef", type=float, default=0.1)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -84,6 +85,7 @@ def main():
         dropout=args.dropout,
         input_hw=input_hw,
         aux_loss_weight=args.aux_loss_weight,
+        eos_coef=args.eos_coef,
     )
     model.fit(
         data_dir=args.data_dir,

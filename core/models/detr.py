@@ -118,6 +118,7 @@ class DETR(BaseModel):
         input_hw: tuple[int, int] | None = None,
         aux_loss: bool = True,
         aux_loss_weight: float = 1.0,
+        eos_coef: float = 0.1,
     ):
         super().__init__(device=device, output_dir=output_dir)
         if hidden_dim % 4 != 0:
@@ -170,6 +171,7 @@ class DETR(BaseModel):
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         self.criterion = DETRLoss(
             num_classes=self.num_classes,
+            eos_coef=eos_coef,
             aux_loss=self.aux_loss,
             aux_loss_weight=aux_loss_weight,
         )
