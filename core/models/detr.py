@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import copy
+import os
+import time
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from ..nn.blocks import C3k2, SPPF
 from ..nn.convs import Conv
+from ..utils.dataset import YOLODatasetSpecificRes, load_class_index_to_name
 from ..utils.detr_loss import DETRLoss
 from ..utils.divers import xywh2xyxy
-from .base import BaseModel
+from ..utils.evaluate import EvalConfig, EvalRunner, MetricsLogger, TrainingPlots
+from .base import BaseModel, _move_imgs_to_device, _resolve_num_workers, _supports_cuda
 
 
 class MLP(nn.Module):
@@ -253,3 +260,181 @@ class DETR(BaseModel):
                 }
             )
         return processed
+
+    def postprocess_for_metrics(self, outputs: dict[str, torch.Tensor], *, conf_threshold: float = 0.0) -> list[torch.Tensor]:
+        detections = self.postprocess(
+            outputs,
+            score_threshold=conf_threshold,
+            absolute_boxes=True,
+        )
+        packed = []
+        for detection in detections:
+            if detection["boxes"].numel() == 0:
+                packed.append(detection["boxes"].new_zeros((0, 6)))
+                continue
+            packed.append(
+                torch.cat(
+                    (
+                        detection["boxes"],
+                        detection["scores"].unsqueeze(1),
+                        detection["labels"].to(detection["boxes"].dtype).unsqueeze(1),
+                    ),
+                    dim=1,
+                )
+            )
+        return packed
+
+    def fit(
+        self,
+        data_dir: str,
+        epochs: int = 100,
+        batch_size: int = 32,
+        lr: float = 1e-4,
+        patience: int = 10,
+        dataset: str = "specificres",
+        preprocessing: str = "none",
+        preprocessing_kwargs: dict | None = None,
+        select_res: dict | None = None,
+        num_workers: int | None = None,
+        persistent_workers: bool = True,
+        full_eval_every: int = 5,
+        save_last_every: int = 5,
+        monitor: str = "val_loss",
+        run_full_eval: bool = True,
+    ):
+        if dataset != "specificres":
+            raise ValueError("DETR.fit currently supports only dataset='specificres'.")
+        if not select_res or "res_hw" not in select_res or "res_key" not in select_res:
+            raise ValueError("DETR.fit requires select_res={'res_hw': (H, W), 'res_key': 'cfgXXX'}.")
+        if monitor not in {"val_loss", "map50", "map50_95"}:
+            raise ValueError("DETR.fit supports monitor in {'val_loss', 'map50', 'map50_95'}.")
+
+        self.input_hw = tuple(select_res["res_hw"])
+        train_dataset = YOLODatasetSpecificRes(
+            data_dir=os.path.join(data_dir, "train/data"),
+            labels_dir=os.path.join(data_dir, "train/labels_detect"),
+            res_hw=self.input_hw,
+            res_key=select_res["res_key"],
+            preprocessing=preprocessing,
+            preprocessing_kwargs=preprocessing_kwargs,
+        )
+        val_dataset = YOLODatasetSpecificRes(
+            data_dir=os.path.join(data_dir, "val/data"),
+            labels_dir=os.path.join(data_dir, "val/labels_detect"),
+            res_hw=self.input_hw,
+            res_key=select_res["res_key"],
+            preprocessing=preprocessing,
+            preprocessing_kwargs=preprocessing_kwargs,
+        )
+
+        pin_memory = _supports_cuda(self.device)
+        resolved_num_workers = _resolve_num_workers(num_workers)
+        loader_kwargs = {
+            "batch_size": batch_size,
+            "pin_memory": pin_memory,
+            "collate_fn": YOLODatasetSpecificRes.collate_fn,
+            "num_workers": resolved_num_workers,
+            "persistent_workers": bool(persistent_workers) and resolved_num_workers > 0,
+        }
+        train_loader = DataLoader(train_dataset, shuffle=True, **loader_kwargs)
+        val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
+
+        output_dir = Path(self.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        self.save_model_summary(self, self.output_dir)
+        logger = MetricsLogger(str(output_dir / "train_log.csv"))
+        eval_runner = EvalRunner(
+            output_dir=self.output_dir,
+            cfg=EvalConfig(iou_thresh=0.5, fa_target=0.01, img_size=self.input_hw),
+            class_index_to_name=load_class_index_to_name(data_dir),
+        )
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=1e-4)
+        best_value = float("inf") if monitor == "val_loss" else float("-inf")
+        bad_epochs = 0
+
+        for epoch in range(1, int(epochs) + 1):
+            start = time.perf_counter()
+            train_loss, train_parts = self._run_epoch(train_loader, optimizer=optimizer, train=True, desc=f"DETR epoch {epoch} train")
+            val_loss, val_parts = self._run_epoch(val_loader, optimizer=None, train=False, desc=f"DETR epoch {epoch} val")
+
+            should_eval = bool(run_full_eval) and ((epoch % max(1, int(full_eval_every)) == 0) or epoch == int(epochs))
+            if should_eval:
+                eval_result = eval_runner.run(epoch=epoch, model=self, val_loader=val_loader)
+                extra_headers = eval_result["extra_headers"]
+                extra_values = eval_result["extra_values"]
+            else:
+                extra_headers = eval_runner.extra_headers() if run_full_eval else []
+                extra_values = [None, None, float("nan"), float("nan"), float("nan"), None] if run_full_eval else []
+
+            logger.log(
+                epoch=epoch,
+                train_loss=train_loss,
+                val_loss=val_loss,
+                loss_box_train=train_parts["loss_bbox"],
+                loss_cls_train=train_parts["loss_cls"],
+                loss_dfl_train=train_parts["loss_giou"],
+                loss_box_val=val_parts["loss_bbox"],
+                loss_cls_val=val_parts["loss_cls"],
+                loss_dfl_val=val_parts["loss_giou"],
+                extra_headers=extra_headers,
+                extra_values=extra_values,
+            )
+            if (epoch % max(1, int(save_last_every)) == 0) or epoch == int(epochs):
+                torch.save(self.state_dict(), output_dir / "last.pt")
+            TrainingPlots.plot_losses(str(output_dir / "train_log.csv"), save_path=str(output_dir / "loss_curves.png"))
+            if run_full_eval and should_eval:
+                TrainingPlots.plot_maps(str(output_dir / "train_log.csv"), save_path=str(output_dir / "map_curves.png"))
+                TrainingPlots.plot_avg_recalls(str(output_dir / "train_log.csv"), save_path=str(output_dir / "avg_recall_curves.png"))
+
+            monitor_value = val_loss
+            if monitor == "map50":
+                monitor_value = extra_values[0]
+            elif monitor == "map50_95":
+                monitor_value = extra_values[1]
+            improved = monitor_value is not None and (
+                monitor_value < best_value if monitor == "val_loss" else monitor_value > best_value
+            )
+            if improved:
+                best_value = float(monitor_value)
+                bad_epochs = 0
+                torch.save(self.state_dict(), output_dir / "best.pt")
+            else:
+                bad_epochs += 1
+
+            print(
+                f"DETR epoch {epoch}: train={train_loss:.4f} val={val_loss:.4f} "
+                f"box={val_parts['loss_bbox']:.4f} cls={val_parts['loss_cls']:.4f} giou={val_parts['loss_giou']:.4f} "
+                f"time={time.perf_counter() - start:.1f}s"
+            )
+            if bad_epochs >= int(patience):
+                print(f"Early stopping on {monitor} after {bad_epochs} epochs without improvement.")
+                break
+
+    def _run_epoch(self, loader, *, optimizer, train: bool, desc: str):
+        self.train(train)
+        totals = {"loss_bbox": 0.0, "loss_cls": 0.0, "loss_giou": 0.0}
+        total_loss = 0.0
+        context = torch.enable_grad() if train else torch.no_grad()
+        with context:
+            for imgs, targets, _ in tqdm(loader, desc=desc, unit="batch"):
+                imgs = _move_imgs_to_device(imgs, self.device, non_blocking=_supports_cuda(self.device))
+                targets = targets.to(self.device)
+                target_list = [
+                    {
+                        "labels": targets[targets[:, 0].long() == batch_index, 1].long(),
+                        "boxes": targets[targets[:, 0].long() == batch_index, 2:6].to(dtype=torch.float32).clamp(0.0, 1.0),
+                    }
+                    for batch_index in range(imgs.shape[0])
+                ]
+                outputs = self(imgs)
+                loss, parts = self.criterion(outputs, target_list)
+                if train:
+                    optimizer.zero_grad()
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(self.parameters(), max_norm=0.1)
+                    optimizer.step()
+                total_loss += float(loss.detach().item())
+                for key in totals:
+                    totals[key] += float(parts[key])
+        num_batches = max(1, len(loader))
+        return total_loss / num_batches, {key: value / num_batches for key, value in totals.items()}

@@ -183,8 +183,12 @@ def analyse_dataset(model,
             imgs    = imgs.to(device) if isinstance(imgs, torch.Tensor) else [i.to(device) for i in imgs]
             targets = targets.to(device)
 
-            d_out, c_out = model(imgs)
-            preds = model.postprocess(d_out, c_out, d_out, conf_thresh)
+            outputs = model(imgs)
+            if isinstance(outputs, dict) and hasattr(model, "postprocess_for_metrics"):
+                preds = model.postprocess_for_metrics(outputs, conf_threshold=conf_thresh)
+            else:
+                d_out, c_out = outputs
+                preds = model.postprocess(d_out, c_out, d_out, conf_thresh)
 
             for img_i, det in enumerate(preds):
                 # ---------- Ground-truth absolu ----------
