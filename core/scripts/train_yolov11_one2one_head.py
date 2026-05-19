@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import gc
 import os
 import sys
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
+import matplotlib.pyplot as plt
 import torch
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
@@ -194,10 +196,117 @@ def run_one2one_job(
             full_eval_every=args.full_eval_every,
             save_last_every=args.save_last_every,
             monitor=args.monitor,
+            run_full_eval=True,
         )
     finally:
         del model
         cleanup_after_run()
+
+
+def _read_train_log(log_path: Path) -> dict[str, list[float]]:
+    columns: dict[str, list[float]] = {}
+    if not log_path.exists():
+        return columns
+    with open(log_path, "r", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            return columns
+        columns = {name: [] for name in reader.fieldnames}
+        for row in reader:
+            for name in reader.fieldnames:
+                value = row.get(name, "")
+                try:
+                    columns[name].append(float(value))
+                except (TypeError, ValueError):
+                    columns[name].append(float("nan"))
+    return columns
+
+
+def _plot_columns(
+    *,
+    logs: dict[str, dict[str, list[float]]],
+    columns: list[str],
+    ylabel: str,
+    title: str,
+    save_path: Path,
+):
+    plt.figure(figsize=(10, 6))
+    has_data = False
+    for loss_type, log in logs.items():
+        epochs = log.get("epoch", [])
+        if not epochs:
+            continue
+        for column in columns:
+            values = log.get(column, [])
+            if not values:
+                continue
+            plt.plot(epochs[:len(values)], values, label=f"{loss_type} {column}")
+            has_data = True
+    if not has_data:
+        plt.close()
+        return
+    plt.xlabel("Epoch")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True)
+    plt.legend()
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"[PLOT] saved {save_path}")
+
+
+def write_benchmark_plots(benchmark_root: Path, source_name: str, losses: Iterable[str]):
+    logs = {}
+    for loss_type in losses:
+        log_path = benchmark_root / output_name_for_one2one(source_name, loss_type) / "train_log.csv"
+        log = _read_train_log(log_path)
+        if log:
+            logs[loss_type] = log
+        else:
+            print(f"[WARN] missing or empty log for one2one {loss_type}: {log_path}")
+
+    if not logs:
+        print("[WARN] no train_log.csv found; benchmark plots were not generated.")
+        return
+
+    plot_dir = benchmark_root / f"{source_name}_one2one_benchmark_plots"
+    _plot_columns(
+        logs=logs,
+        columns=["train_loss", "val_loss"],
+        ylabel="Loss",
+        title="YOLOv11 one2one loss comparison",
+        save_path=plot_dir / "loss_comparison.png",
+    )
+    _plot_columns(
+        logs=logs,
+        columns=["loss_box_train", "loss_cls_train", "loss_dfl_train"],
+        ylabel="Train loss component",
+        title="YOLOv11 one2one train loss components",
+        save_path=plot_dir / "train_loss_components.png",
+    )
+    _plot_columns(
+        logs=logs,
+        columns=["loss_box_val", "loss_cls_val", "loss_dfl_val"],
+        ylabel="Validation loss component",
+        title="YOLOv11 one2one validation loss components",
+        save_path=plot_dir / "val_loss_components.png",
+    )
+    _plot_columns(
+        logs=logs,
+        columns=["map50", "map50_95"],
+        ylabel="mAP",
+        title="YOLOv11 one2one mAP comparison",
+        save_path=plot_dir / "map_comparison.png",
+    )
+    _plot_columns(
+        logs=logs,
+        columns=["avg_recall_low_snr", "avg_recall_medium_snr", "avg_recall_high_snr"],
+        ylabel="Average recall",
+        title="YOLOv11 one2one average recall comparison",
+        save_path=plot_dir / "avg_recall_comparison.png",
+    )
 
 
 def main():
@@ -257,6 +366,8 @@ def main():
             input_channels=input_channels,
             res_hw=res_hw,
         )
+
+    write_benchmark_plots(benchmark_root, source_name, losses)
 
 
 if __name__ == "__main__":
