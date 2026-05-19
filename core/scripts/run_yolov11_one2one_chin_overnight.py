@@ -16,7 +16,7 @@ DEFAULT_DATA_DIR = "/data/RAWSIM/RMA/rf_dataset_for_real_validation"
 DEFAULT_SOURCE_RUN_DIR = "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/yolov11n_specificres_cfg512"
 DEFAULT_WEIGHTS = f"{DEFAULT_SOURCE_RUN_DIR}/best.pt"
 DEFAULT_OUTPUT_DIR = "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/one2one_head_chin_overnight"
-DEFAULT_GPUS = ("cuda:0", "cuda:1")
+DEFAULT_GPUS = ("cuda:0",)
 DEFAULT_LOSSES = ("tal", "hungarian")
 
 
@@ -46,7 +46,7 @@ class Job:
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Launch an overnight YOLOv11 one2one benchmark on multiple GPUs, using a P3/P4/P5 transformer chin, "
+            "Launch an overnight YOLOv11 one2one benchmark on the H100 by default, using a P3/P4/P5 transformer chin, "
             "then generate a CSV and plots comparing the runs."
         )
     )
@@ -54,7 +54,7 @@ def parse_args():
     parser.add_argument("--source-run-dir", default=DEFAULT_SOURCE_RUN_DIR)
     parser.add_argument("--weights", default=DEFAULT_WEIGHTS)
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--gpus", nargs="+", default=list(DEFAULT_GPUS), help="Devices used as workers, e.g. cuda:0 cuda:1.")
+    parser.add_argument("--gpus", nargs="+", default=list(DEFAULT_GPUS), help="Devices used as workers. Default is cuda:0 only.")
     parser.add_argument("--losses", nargs="+", choices=("tal", "hungarian"), default=list(DEFAULT_LOSSES))
     parser.add_argument("--scale", default="n")
     parser.add_argument("--res-key", default="cfg512")
