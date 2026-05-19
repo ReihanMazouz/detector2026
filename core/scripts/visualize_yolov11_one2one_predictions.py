@@ -30,6 +30,16 @@ DEFAULT_ONE2ONE_HUNGARIAN_CHECKPOINT = "/data/RAWSIM/RMA/training_folder/rf_data
 DEFAULT_DEVICE = "cuda:1"
 
 
+def parse_chin_levels(value: str) -> tuple[str, ...]:
+    levels = tuple(level.strip().lower() for level in value.split(",") if level.strip())
+    if not levels:
+        raise argparse.ArgumentTypeError("At least one transformer chin level is required.")
+    invalid = [level for level in levels if level not in {"p3", "p4", "p5"}]
+    if invalid:
+        raise argparse.ArgumentTypeError(f"Invalid transformer chin levels: {invalid}. Use p3,p4,p5.")
+    return levels
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Visualize YOLOv11 one2many+NMS, one2one TAL, and one2one Hungarian predictions on the same samples."
@@ -53,6 +63,18 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--cmap", default="viridis")
+    parser.add_argument(
+        "--use-transformer-chin",
+        action="store_true",
+        help="Build one2one models with the transformer chin before loading their checkpoints.",
+    )
+    parser.add_argument("--chin-levels", type=parse_chin_levels, default=("p4", "p5"))
+    parser.add_argument("--chin-d-model", type=int, default=128)
+    parser.add_argument("--chin-num-heads", type=int, default=4)
+    parser.add_argument("--chin-num-layers", type=int, default=1)
+    parser.add_argument("--chin-ffn-ratio", type=float, default=2.0)
+    parser.add_argument("--chin-dropout", type=float, default=0.0)
+    parser.add_argument("--chin-residual-scale", type=float, default=0.0)
     return parser.parse_args()
 
 
@@ -173,6 +195,14 @@ def _build_model(args, output_dir: Path, input_channels: int) -> YOLOv11:
         device=args.device,
         input_canals=input_channels,
         width_mult=YOLO11_WIDTH_MULT[args.scale],
+        use_transformer_chin=args.use_transformer_chin,
+        chin_levels=args.chin_levels,
+        chin_d_model=args.chin_d_model,
+        chin_num_heads=args.chin_num_heads,
+        chin_num_layers=args.chin_num_layers,
+        chin_ffn_ratio=args.chin_ffn_ratio,
+        chin_dropout=args.chin_dropout,
+        chin_residual_scale=args.chin_residual_scale,
     )
 
 

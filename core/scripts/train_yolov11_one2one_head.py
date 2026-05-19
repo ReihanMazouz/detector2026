@@ -44,8 +44,25 @@ DEFAULT_LR = 1e-4
 DEFAULT_MINIMUM_POSSIBLE_CANDIDATES = 7
 
 
-def output_name_for_one2one(source_name: str, loss_type: str) -> str:
-    return f"{source_name}_one2one_{loss_type}"
+def output_name_for_one2one(source_name: str, loss_type: str, suffix: str = "") -> str:
+    return f"{source_name}_one2one_{loss_type}{suffix}"
+
+
+def parse_chin_levels(value: str) -> tuple[str, ...]:
+    levels = tuple(level.strip().lower() for level in value.split(",") if level.strip())
+    if not levels:
+        raise argparse.ArgumentTypeError("At least one transformer chin level is required.")
+    invalid = [level for level in levels if level not in {"p3", "p4", "p5"}]
+    if invalid:
+        raise argparse.ArgumentTypeError(f"Invalid transformer chin levels: {invalid}. Use p3,p4,p5.")
+    return levels
+
+
+def transformer_chin_suffix(args) -> str:
+    if not args.use_transformer_chin:
+        return ""
+    levels = "".join(args.chin_levels)
+    return f"_chin_{levels}_d{args.chin_d_model}_l{args.chin_num_layers}"
 
 
 def default_weights_from_source_run(source_run_dir: str | None) -> Path | None:
@@ -72,7 +89,20 @@ def build_yolov11(
     device: str,
     num_classes: int,
     reg_max: int,
+    args=None,
 ) -> YOLOv11:
+    chin_kwargs = {}
+    if args is not None:
+        chin_kwargs = {
+            "use_transformer_chin": args.use_transformer_chin,
+            "chin_levels": args.chin_levels,
+            "chin_d_model": args.chin_d_model,
+            "chin_num_heads": args.chin_num_heads,
+            "chin_num_layers": args.chin_num_layers,
+            "chin_ffn_ratio": args.chin_ffn_ratio,
+            "chin_dropout": args.chin_dropout,
+            "chin_residual_scale": args.chin_residual_scale,
+        }
     return YOLOv11(
         output_dir=output_dir,
         num_classes=num_classes,
@@ -80,6 +110,7 @@ def build_yolov11(
         device=device,
         input_canals=input_channels,
         width_mult=YOLO11_WIDTH_MULT[scale],
+        **chin_kwargs,
     )
 
 
@@ -132,6 +163,18 @@ def parse_args():
         default=1.0,
         help="Hungarian one2one classification weight ratio between negatives and positives.",
     )
+    parser.add_argument(
+        "--use-transformer-chin",
+        action="store_true",
+        help="Insert a lightweight transformer chin before the one2one head.",
+    )
+    parser.add_argument("--chin-levels", type=parse_chin_levels, default=("p4", "p5"))
+    parser.add_argument("--chin-d-model", type=int, default=128)
+    parser.add_argument("--chin-num-heads", type=int, default=4)
+    parser.add_argument("--chin-num-layers", type=int, default=1)
+    parser.add_argument("--chin-ffn-ratio", type=float, default=2.0)
+    parser.add_argument("--chin-dropout", type=float, default=0.0)
+    parser.add_argument("--chin-residual-scale", type=float, default=0.0)
     parser.add_argument(
         "--losses",
         nargs="+",
@@ -193,6 +236,7 @@ def run_one2one_job(
         device=args.device,
         num_classes=args.num_classes,
         reg_max=args.reg_max,
+        args=args,
     )
     try:
         model.load_weights(str(weights_path), device=model.device, eval_mode=False)
@@ -306,6 +350,7 @@ def run_initial_diagnostic(
         device=args.device,
         num_classes=args.num_classes,
         reg_max=args.reg_max,
+        args=args,
     )
     try:
         report_checkpoint_compatibility(model, weights_path)
@@ -415,10 +460,10 @@ def _plot_columns(
     print(f"[PLOT] saved {save_path}")
 
 
-def write_benchmark_plots(benchmark_root: Path, source_name: str, losses: Iterable[str]):
+def write_benchmark_plots(benchmark_root: Path, source_name: str, losses: Iterable[str], suffix: str = ""):
     logs = {}
     for loss_type in losses:
-        log_path = benchmark_root / output_name_for_one2one(source_name, loss_type) / "train_log.csv"
+        log_path = benchmark_root / output_name_for_one2one(source_name, loss_type, suffix) / "train_log.csv"
         log = _read_train_log(log_path)
         if log:
             logs[loss_type] = log
@@ -429,7 +474,7 @@ def write_benchmark_plots(benchmark_root: Path, source_name: str, losses: Iterab
         print("[WARN] no train_log.csv found; benchmark plots were not generated.")
         return
 
-    plot_dir = benchmark_root / f"{source_name}_one2one_benchmark_plots"
+    plot_dir = benchmark_root / f"{source_name}_one2one_benchmark_plots{suffix}"
     _plot_columns(
         logs=logs,
         columns=["train_loss", "val_loss"],
@@ -491,6 +536,7 @@ def main():
     source_name = infer_source_name(weights_path, args.source_run_dir)
     benchmark_root = Path(args.output_dir) if args.output_dir else Path(args.output_dir_parent)
     losses: Iterable[str] = tuple(dict.fromkeys(args.losses))
+    chin_suffix = transformer_chin_suffix(args)
 
     print("YOLOv11 one2one head benchmark")
     print(f"  data_dir = {args.data_dir}")
@@ -507,9 +553,15 @@ def main():
     print(f"  losses = {list(losses)}")
     print(f"  minimum_possible_candidates = {args.minimum_possible_candidates}")
     print(f"  negative_to_positive_ratio = {args.negative_to_positive_ratio}")
+    print(f"  use_transformer_chin = {args.use_transformer_chin}")
+    if args.use_transformer_chin:
+        print(f"  chin_levels = {args.chin_levels}")
+        print(f"  chin_d_model = {args.chin_d_model}")
+        print(f"  chin_num_heads = {args.chin_num_heads}")
+        print(f"  chin_num_layers = {args.chin_num_layers}")
     print("\nPlanned experiments:")
     for loss_type in losses:
-        output_dir = benchmark_root / output_name_for_one2one(source_name, loss_type)
+        output_dir = benchmark_root / output_name_for_one2one(source_name, loss_type, chin_suffix)
         status = "RUN" if args.overwrite or not output_dir.exists() else "SKIP"
         print(f"  [{status}] one2one {loss_type} -> {output_dir}")
 
@@ -531,14 +583,14 @@ def main():
     for loss_type in losses:
         run_one2one_job(
             loss_type=loss_type,
-            output_dir=benchmark_root / output_name_for_one2one(source_name, loss_type),
+            output_dir=benchmark_root / output_name_for_one2one(source_name, loss_type, chin_suffix),
             weights_path=weights_path,
             args=args,
             input_channels=input_channels,
             res_hw=res_hw,
         )
 
-    write_benchmark_plots(benchmark_root, source_name, losses)
+    write_benchmark_plots(benchmark_root, source_name, losses, chin_suffix)
 
 
 if __name__ == "__main__":

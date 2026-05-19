@@ -12,6 +12,85 @@ from .Head.detect import Detect, One2OneDetect
 from .anisotropic_utils import build_anisotropic_standard_plan
 
 
+class TransformerChin(nn.Module):
+    """Light transformer block between the YOLO neck and the detection head."""
+
+    LEVEL_TO_INDEX = {"p3": 0, "p4": 1, "p5": 2}
+
+    def __init__(
+        self,
+        in_channels,
+        levels=("p4", "p5"),
+        d_model=128,
+        num_heads=4,
+        num_layers=1,
+        ffn_ratio=2.0,
+        dropout=0.0,
+        residual_scale=0.0,
+    ):
+        super().__init__()
+        if d_model % num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads.")
+
+        self.levels = tuple(str(level).lower() for level in levels)
+        self.level_indices = []
+        for level in self.levels:
+            if level not in self.LEVEL_TO_INDEX:
+                raise ValueError("TransformerChin levels must be chosen from 'p3', 'p4', 'p5'.")
+            self.level_indices.append(self.LEVEL_TO_INDEX[level])
+
+        selected_channels = [in_channels[index] for index in self.level_indices]
+        self.proj_in = nn.ModuleList(nn.Conv2d(channels, d_model, kernel_size=1) for channels in selected_channels)
+        self.proj_out = nn.ModuleList(nn.Conv2d(d_model, channels, kernel_size=1) for channels in selected_channels)
+        self.pos_proj = nn.Linear(2, d_model)
+        self.level_embed = nn.Parameter(torch.zeros(len(self.level_indices), d_model))
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=num_heads,
+            dim_feedforward=max(d_model, int(d_model * ffn_ratio)),
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.residual_scale = nn.Parameter(torch.tensor(float(residual_scale)))
+
+    def _position_tokens(self, height, width, level_index, device, dtype):
+        y = torch.linspace(0.0, 1.0, height, device=device, dtype=dtype)
+        x = torch.linspace(0.0, 1.0, width, device=device, dtype=dtype)
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
+        coords = torch.stack((xx, yy), dim=-1).reshape(1, height * width, 2)
+        pos = self.pos_proj(coords)
+        return pos + self.level_embed[level_index].to(device=device, dtype=dtype).view(1, 1, -1)
+
+    def forward(self, features):
+        outputs = list(features)
+        tokens = []
+        shapes = []
+
+        for local_index, feature_index in enumerate(self.level_indices):
+            feat = features[feature_index]
+            projected = self.proj_in[local_index](feat)
+            batch_size, channels, height, width = projected.shape
+            token = projected.flatten(2).transpose(1, 2)
+            token = token + self._position_tokens(height, width, local_index, token.device, token.dtype)
+            tokens.append(token)
+            shapes.append((batch_size, channels, height, width))
+
+        encoded = self.encoder(torch.cat(tokens, dim=1))
+        start = 0
+        for local_index, feature_index in enumerate(self.level_indices):
+            batch_size, channels, height, width = shapes[local_index]
+            end = start + height * width
+            encoded_level = encoded[:, start:end].transpose(1, 2).reshape(batch_size, channels, height, width)
+            delta = self.proj_out[local_index](encoded_level)
+            outputs[feature_index] = features[feature_index] + self.residual_scale * delta
+            start = end
+
+        return tuple(outputs)
+
+
 class YOLOv11(BaseModel):
     def __init__(
         self,
@@ -26,6 +105,14 @@ class YOLOv11(BaseModel):
         anisotropic=False,
         p3_size=(64, 64),
         input_hw=None,
+        use_transformer_chin=False,
+        chin_levels=("p4", "p5"),
+        chin_d_model=128,
+        chin_num_heads=4,
+        chin_num_layers=1,
+        chin_ffn_ratio=2.0,
+        chin_dropout=0.0,
+        chin_residual_scale=0.0,
     ):
         super().__init__(device=device, output_dir=output_dir)
         self.num_classes = num_classes
@@ -34,6 +121,7 @@ class YOLOv11(BaseModel):
         self.anisotropic = bool(anisotropic)
         self.p3_size = tuple(p3_size)
         self.input_hw = tuple(input_hw) if input_hw is not None else None
+        self.use_transformer_chin = bool(use_transformer_chin)
 
         if strides is None:
             strides = [8, 16, 32]
@@ -90,6 +178,20 @@ class YOLOv11(BaseModel):
 
         self.detect.bias_init(image_size=self.input_hw if self.input_hw is not None else 1024)
         self.detect_one2one = One2OneDetect(self.detect)
+        self.transformer_chin = (
+            TransformerChin(
+                in_channels=[c3, c4, c5],
+                levels=chin_levels,
+                d_model=chin_d_model,
+                num_heads=chin_num_heads,
+                num_layers=chin_num_layers,
+                ffn_ratio=chin_ffn_ratio,
+                dropout=chin_dropout,
+                residual_scale=chin_residual_scale,
+            )
+            if self.use_transformer_chin
+            else None
+        )
         self.active_head = "one2many"
 
         # Loss
@@ -193,6 +295,8 @@ class YOLOv11(BaseModel):
         head = self.active_head if head is None else head
 
         if head == "one2one":
+            if self.transformer_chin is not None:
+                p3_out, p4_out2, p5_out = self.transformer_chin((p3_out, p4_out2, p5_out))
             return self.detect_one2one(p3_out, p4_out2, p5_out)
         if head != "one2many":
             raise ValueError("head must be 'one2many' or 'one2one'.")
@@ -236,9 +340,14 @@ class YOLOv11(BaseModel):
         self.criterion = self.criterion_one2one
         for param in self.parameters():
             param.requires_grad = False
+        if self.transformer_chin is not None:
+            for param in self.transformer_chin.parameters():
+                param.requires_grad = True
         for param in self.detect_one2one.parameters():
             param.requires_grad = True
         self.detect.eval()
+        if self.transformer_chin is not None:
+            self.transformer_chin.train()
         self.detect_one2one.train()
 
     def use_one2many_head(self):
@@ -252,6 +361,8 @@ class YOLOv11(BaseModel):
         super().train(mode)
         if self.active_head == "one2one":
             self._set_frozen_parts_eval()
+            if self.transformer_chin is not None:
+                self.transformer_chin.train(mode)
             self.detect_one2one.train(mode)
         return self
 
@@ -300,7 +411,7 @@ class YOLOv11(BaseModel):
 
     def _set_frozen_parts_eval(self):
         for name, module in self.named_children():
-            if name != "detect_one2one":
+            if name not in {"detect_one2one", "transformer_chin"}:
                 module.eval()
 
     def sync_one2one_from_one2many(self):
