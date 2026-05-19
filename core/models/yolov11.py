@@ -6,7 +6,7 @@ import math
 from ..nn.convs import Conv, DWConv
 from ..nn.blocks import C3k2, SPPF, C2PSA, DFL
 from .base import BaseModel
-from ..utils.loss import YOLODetectionLoss
+from ..utils.loss import YOLODetectionLoss, YOLOOne2OneHungarianLoss
 from ..utils.tal import make_anchors, dist2bbox
 from .Head.detect import Detect, One2OneDetect
 from .anisotropic_utils import build_anisotropic_standard_plan
@@ -207,19 +207,30 @@ class YOLOv11(BaseModel):
             return self.criterion_one2one
         return self.criterion
 
-    def train_one2one_head_only(self, minimum_possible_candidates=7, sync_from_one2many=True):
+    def train_one2one_head_only(self, minimum_possible_candidates=7, sync_from_one2many=True, loss_type="tal"):
         """Freeze the existing model and train only the copied one2one detect head."""
         if sync_from_one2many:
             self.sync_one2one_from_one2many()
         self.active_head = "one2one"
-        self.criterion_one2one = YOLODetectionLoss(
-            num_classes=self.num_classes,
-            strides=self.strides,
-            reg_max=self.reg_max,
-            tal_topk=1,
-            minimum_possible_candidates=minimum_possible_candidates,
-            device=self.device,
-        )
+        loss_type = str(loss_type).lower()
+        if loss_type == "tal":
+            self.criterion_one2one = YOLODetectionLoss(
+                num_classes=self.num_classes,
+                strides=self.strides,
+                reg_max=self.reg_max,
+                tal_topk=1,
+                minimum_possible_candidates=minimum_possible_candidates,
+                device=self.device,
+            )
+        elif loss_type == "hungarian":
+            self.criterion_one2one = YOLOOne2OneHungarianLoss(
+                num_classes=self.num_classes,
+                strides=self.strides,
+                reg_max=self.reg_max,
+                device=self.device,
+            )
+        else:
+            raise ValueError("loss_type must be 'tal' or 'hungarian'.")
         self.criterion = self.criterion_one2one
         for param in self.parameters():
             param.requires_grad = False

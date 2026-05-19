@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import Iterable, List, Tuple
 
 import torch
 
@@ -38,8 +39,8 @@ DEFAULT_LR = 1e-4
 DEFAULT_MINIMUM_POSSIBLE_CANDIDATES = 7
 
 
-def output_name_for_one2one(source_name: str) -> str:
-    return f"{source_name}_one2one_head"
+def output_name_for_one2one(source_name: str, loss_type: str) -> str:
+    return f"{source_name}_one2one_{loss_type}"
 
 
 def default_weights_from_source_run(source_run_dir: str | None) -> Path | None:
@@ -94,9 +95,13 @@ def parse_args():
     parser.add_argument(
         "--output-dir-parent",
         default=DEFAULT_OUTPUT_DIR_PARENT,
-        help="Parent directory for the one2one experiment folder.",
+        help="Parent directory for the one2one benchmark experiment folders.",
     )
-    parser.add_argument("--output-dir", default=None, help="Explicit output directory for the one2one run.")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Explicit benchmark root directory. Loss-specific folders are created inside it.",
+    )
     parser.add_argument("--scale", choices=sorted(YOLO11_WIDTH_MULT.keys()), default="n")
     parser.add_argument("--device", default=DEFAULT_DEVICE)
     parser.add_argument("--num-classes", type=int, default=DEFAULT_NUM_CLASSES)
@@ -117,6 +122,13 @@ def parse_args():
         default=DEFAULT_MINIMUM_POSSIBLE_CANDIDATES,
     )
     parser.add_argument(
+        "--losses",
+        nargs="+",
+        choices=("tal", "hungarian"),
+        default=("tal", "hungarian"),
+        help="One2one losses to benchmark, in execution order.",
+    )
+    parser.add_argument(
         "--no-sync-from-one2many",
         action="store_true",
         help="Do not re-copy one2many head weights before one2one training.",
@@ -128,6 +140,64 @@ def parse_args():
     )
     parser.add_argument("--dry-run", action="store_true", help="Print resolved configuration and exit.")
     return parser.parse_args()
+
+
+def cleanup_after_run():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def run_one2one_job(
+    *,
+    loss_type: str,
+    output_dir: Path,
+    weights_path: Path,
+    args,
+    input_channels: int,
+    res_hw: Resolution,
+):
+    if output_dir.exists() and not args.overwrite:
+        print(f"[SKIP] one2one {loss_type}: output_dir already exists: {output_dir}")
+        return
+
+    print(f"\n[RUN ] one2one {loss_type}")
+    print(f"       output_dir = {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    model = build_yolov11(
+        output_dir=str(output_dir),
+        scale=args.scale,
+        input_channels=input_channels,
+        device=args.device,
+        num_classes=args.num_classes,
+        reg_max=args.reg_max,
+    )
+    try:
+        model.load_weights(str(weights_path), device=model.device, eval_mode=False)
+        model.train_one2one_head_only(
+            minimum_possible_candidates=args.minimum_possible_candidates,
+            sync_from_one2many=not args.no_sync_from_one2many,
+            loss_type=loss_type,
+        )
+
+        model.fit(
+            data_dir=args.data_dir,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            patience=args.patience,
+            dataset="specificres",
+            preprocessing=args.preprocessing,
+            select_res={"res_hw": res_hw, "res_key": args.res_key},
+            num_workers=args.num_workers,
+            full_eval_every=args.full_eval_every,
+            save_last_every=args.save_last_every,
+            monitor=args.monitor,
+        )
+    finally:
+        del model
+        cleanup_after_run()
 
 
 def main():
@@ -152,12 +222,13 @@ def main():
     input_channels = preprocessing_num_channels(args.preprocessing)
 
     source_name = infer_source_name(weights_path, args.source_run_dir)
-    output_dir = Path(args.output_dir) if args.output_dir else Path(args.output_dir_parent) / output_name_for_one2one(source_name)
+    benchmark_root = Path(args.output_dir) if args.output_dir else Path(args.output_dir_parent)
+    losses: Iterable[str] = tuple(dict.fromkeys(args.losses))
 
-    print("YOLOv11 one2one head fine-tuning")
+    print("YOLOv11 one2one head benchmark")
     print(f"  data_dir = {args.data_dir}")
     print(f"  weights = {weights_path}")
-    print(f"  output_dir = {output_dir}")
+    print(f"  output_root = {benchmark_root}")
     print(f"  scale = {args.scale}")
     print(f"  preprocessing = {args.preprocessing}")
     print(f"  input_channels = {input_channels}")
@@ -166,45 +237,26 @@ def main():
     print(f"  res_hw = {res_hw}")
     print(f"  epochs = {args.epochs}")
     print(f"  lr = {args.lr}")
+    print(f"  losses = {list(losses)}")
     print(f"  minimum_possible_candidates = {args.minimum_possible_candidates}")
-
-    if output_dir.exists() and not args.overwrite:
-        print(f"[SKIP] output_dir already exists: {output_dir}")
-        print("       Pass --overwrite to run anyway.")
-        return
+    print("\nPlanned experiments:")
+    for loss_type in losses:
+        output_dir = benchmark_root / output_name_for_one2one(source_name, loss_type)
+        status = "RUN" if args.overwrite or not output_dir.exists() else "SKIP"
+        print(f"  [{status}] one2one {loss_type} -> {output_dir}")
 
     if args.dry_run:
         return
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    model = build_yolov11(
-        output_dir=str(output_dir),
-        scale=args.scale,
-        input_channels=input_channels,
-        device=args.device,
-        num_classes=args.num_classes,
-        reg_max=args.reg_max,
-    )
-    model.load_weights(str(weights_path), device=model.device, eval_mode=False)
-    model.train_one2one_head_only(
-        minimum_possible_candidates=args.minimum_possible_candidates,
-        sync_from_one2many=not args.no_sync_from_one2many,
-    )
-
-    model.fit(
-        data_dir=args.data_dir,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        lr=args.lr,
-        patience=args.patience,
-        dataset="specificres",
-        preprocessing=args.preprocessing,
-        select_res={"res_hw": res_hw, "res_key": args.res_key},
-        num_workers=args.num_workers,
-        full_eval_every=args.full_eval_every,
-        save_last_every=args.save_last_every,
-        monitor=args.monitor,
-    )
+    for loss_type in losses:
+        run_one2one_job(
+            loss_type=loss_type,
+            output_dir=benchmark_root / output_name_for_one2one(source_name, loss_type),
+            weights_path=weights_path,
+            args=args,
+            input_channels=input_channels,
+            res_hw=res_hw,
+        )
 
 
 if __name__ == "__main__":
