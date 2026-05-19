@@ -207,7 +207,8 @@ class YOLOv11(BaseModel):
             return self.criterion_one2one
         return self.criterion
 
-    def train_one2one_head_only(self, minimum_possible_candidates=7, sync_from_one2many=True, loss_type="tal"):
+    def train_one2one_head_only(self, minimum_possible_candidates=7, sync_from_one2many=True, loss_type="tal",
+                                negative_to_positive_ratio=1.0):
         """Freeze the existing model and train only the copied one2one detect head."""
         if sync_from_one2many:
             self.sync_one2one_from_one2many()
@@ -227,6 +228,7 @@ class YOLOv11(BaseModel):
                 num_classes=self.num_classes,
                 strides=self.strides,
                 reg_max=self.reg_max,
+                negative_to_positive_ratio=negative_to_positive_ratio,
                 device=self.device,
             )
         else:
@@ -253,8 +255,8 @@ class YOLOv11(BaseModel):
             self.detect_one2one.train(mode)
         return self
 
-    def postprocess(self, dist_out, cls_out, feats, conf_thres=0.1, iou_thres=0.1, iou_same_box=0.9, without_nms=False, max_det=300):
-        without_nms = bool(without_nms or self.active_head == "one2one")
+    def postprocess(self, dist_out, cls_out, feats, conf_thres=0.1, iou_thres=0.1, iou_same_box=0.9, without_nms=None, max_det=300):
+        without_nms = self.active_head == "one2one" if without_nms is None else bool(without_nms)
         if not without_nms:
             return super().postprocess(
                 dist_out,

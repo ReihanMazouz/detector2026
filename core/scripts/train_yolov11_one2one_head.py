@@ -10,6 +10,7 @@ from typing import Iterable, List, Tuple
 
 import matplotlib.pyplot as plt
 import torch
+from torch.utils.data import DataLoader
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
@@ -31,6 +32,8 @@ from detector2026.core.scripts.train_benchmark_suite import (
     YOLO11_WIDTH_MULT,
     find_input_resolutions,
 )
+from detector2026.core.utils.dataset import YOLODatasetSpecificRes, load_class_index_to_name
+from detector2026.core.utils.evaluate import EvalConfig, EvalRunner
 from detector2026.core.utils.preprocess import preprocessing_num_channels
 
 DEFAULT_DEVICE = 'cuda:1'
@@ -124,6 +127,12 @@ def parse_args():
         default=DEFAULT_MINIMUM_POSSIBLE_CANDIDATES,
     )
     parser.add_argument(
+        "--negative-to-positive-ratio",
+        type=float,
+        default=1.0,
+        help="Hungarian one2one classification weight ratio between negatives and positives.",
+    )
+    parser.add_argument(
         "--losses",
         nargs="+",
         choices=("tal", "hungarian"),
@@ -139,6 +148,16 @@ def parse_args():
         "--overwrite",
         action="store_true",
         help="Run even if the output directory already exists.",
+    )
+    parser.add_argument(
+        "--diagnose-initial",
+        action="store_true",
+        help="Before training, evaluate one2many+NMS, copied one2one+NMS, and copied one2one+noNMS.",
+    )
+    parser.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help="Run the initial diagnostic and exit without training.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print resolved configuration and exit.")
     return parser.parse_args()
@@ -181,6 +200,7 @@ def run_one2one_job(
             minimum_possible_candidates=args.minimum_possible_candidates,
             sync_from_one2many=not args.no_sync_from_one2many,
             loss_type=loss_type,
+            negative_to_positive_ratio=args.negative_to_positive_ratio,
         )
 
         model.fit(
@@ -198,6 +218,144 @@ def run_one2one_job(
             monitor=args.monitor,
             run_full_eval=True,
         )
+    finally:
+        del model
+        cleanup_after_run()
+
+
+def build_val_loader(args, res_hw: Resolution):
+    val_dataset = YOLODatasetSpecificRes(
+        data_dir=os.path.join(args.data_dir, "val/data"),
+        labels_dir=os.path.join(args.data_dir, "val/labels_detect"),
+        res_hw=res_hw,
+        res_key=args.res_key,
+        preprocessing=args.preprocessing,
+    )
+    num_workers = 0 if args.num_workers is None else max(0, int(args.num_workers))
+    return DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        pin_memory=torch.cuda.is_available() and str(args.device).startswith("cuda"),
+        collate_fn=val_dataset.collate_fn,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
+    )
+
+
+def report_checkpoint_compatibility(model: YOLOv11, weights_path: Path):
+    state_dict = torch.load(weights_path, map_location=model.device)
+    model_state = model.state_dict()
+    compatible = [
+        key for key, value in state_dict.items()
+        if key in model_state and model_state[key].shape == value.shape
+    ]
+    incompatible = [
+        key for key, value in state_dict.items()
+        if key in model_state and model_state[key].shape != value.shape
+    ]
+    unexpected = [key for key in state_dict if key not in model_state]
+    missing_after_load = [key for key in model_state if key not in state_dict]
+    print("\n[DIAG] Checkpoint compatibility")
+    print(f"       checkpoint = {weights_path}")
+    print(f"       compatible keys = {len(compatible)} / {len(model_state)} model keys")
+    print(f"       incompatible shape keys = {len(incompatible)}")
+    print(f"       unexpected checkpoint keys = {len(unexpected)}")
+    print(f"       missing model keys before partial load = {len(missing_after_load)}")
+    if incompatible[:10]:
+        print("       first incompatible keys:")
+        for key in incompatible[:10]:
+            print(f"         - {key}: checkpoint={tuple(state_dict[key].shape)} model={tuple(model_state[key].shape)}")
+    return compatible, incompatible, unexpected, missing_after_load
+
+
+def summarize_eval_result(label: str, result: dict):
+    values = result["extra_values"]
+    print(
+        f"[DIAG] {label}: "
+        f"mAP50={values[0]} | "
+        f"mAP50_95={values[1]} | "
+        f"avgRec(low/med/high)={values[2]}/{values[3]}/{values[4]}"
+    )
+
+
+def run_initial_diagnostic(
+    *,
+    benchmark_root: Path,
+    source_name: str,
+    weights_path: Path,
+    args,
+    input_channels: int,
+    res_hw: Resolution,
+):
+    print("\n[DIAG] Running initial one2one sanity checks")
+    diag_dir = benchmark_root / f"{source_name}_one2one_initial_diagnostic"
+    diag_dir.mkdir(parents=True, exist_ok=True)
+
+    val_loader = build_val_loader(args, res_hw)
+    runner = EvalRunner(
+        output_dir=str(diag_dir),
+        cfg=EvalConfig(iou_thresh=0.5, fa_target=0.01, img_size=res_hw),
+        class_index_to_name=load_class_index_to_name(args.data_dir),
+    )
+
+    model = build_yolov11(
+        output_dir=str(diag_dir),
+        scale=args.scale,
+        input_channels=input_channels,
+        device=args.device,
+        num_classes=args.num_classes,
+        reg_max=args.reg_max,
+    )
+    try:
+        report_checkpoint_compatibility(model, weights_path)
+        missing, unexpected = model.load_weights(str(weights_path), device=model.device, eval_mode=False)
+        print(f"[DIAG] load_weights missing keys after partial load = {len(missing)}")
+        print(f"[DIAG] load_weights unexpected keys = {len(unexpected)}")
+
+        model.use_one2many_head()
+        model.eval()
+        result = runner.run(epoch=0, model=model, val_loader=val_loader)
+        summarize_eval_result("one2many + NMS", result)
+
+        model.sync_one2one_from_one2many()
+        model.use_one2one_head()
+        model.eval()
+
+        original_postprocess = model.postprocess
+
+        def one2one_with_nms(dist_out, cls_out, feats, conf_thres=0.1, iou_thres=0.1, iou_same_box=0.9, without_nms=None, max_det=300):
+            return original_postprocess(
+                dist_out,
+                cls_out,
+                feats,
+                conf_thres=conf_thres,
+                iou_thres=iou_thres,
+                iou_same_box=iou_same_box,
+                without_nms=False,
+                max_det=max_det,
+            )
+
+        model.postprocess = one2one_with_nms
+        result = runner.run(epoch=1, model=model, val_loader=val_loader)
+        summarize_eval_result("copied one2one + NMS", result)
+
+        def one2one_without_nms(dist_out, cls_out, feats, conf_thres=0.1, iou_thres=0.1, iou_same_box=0.9, without_nms=None, max_det=300):
+            return original_postprocess(
+                dist_out,
+                cls_out,
+                feats,
+                conf_thres=conf_thres,
+                iou_thres=iou_thres,
+                iou_same_box=iou_same_box,
+                without_nms=True,
+                max_det=max_det,
+            )
+
+        model.postprocess = one2one_without_nms
+        result = runner.run(epoch=2, model=model, val_loader=val_loader)
+        summarize_eval_result("copied one2one + noNMS", result)
+        model.postprocess = original_postprocess
     finally:
         del model
         cleanup_after_run()
@@ -348,6 +506,7 @@ def main():
     print(f"  lr = {args.lr}")
     print(f"  losses = {list(losses)}")
     print(f"  minimum_possible_candidates = {args.minimum_possible_candidates}")
+    print(f"  negative_to_positive_ratio = {args.negative_to_positive_ratio}")
     print("\nPlanned experiments:")
     for loss_type in losses:
         output_dir = benchmark_root / output_name_for_one2one(source_name, loss_type)
@@ -356,6 +515,18 @@ def main():
 
     if args.dry_run:
         return
+
+    if args.diagnose_initial or args.diagnostic_only:
+        run_initial_diagnostic(
+            benchmark_root=benchmark_root,
+            source_name=source_name,
+            weights_path=weights_path,
+            args=args,
+            input_channels=input_channels,
+            res_hw=res_hw,
+        )
+        if args.diagnostic_only:
+            return
 
     for loss_type in losses:
         run_one2one_job(
