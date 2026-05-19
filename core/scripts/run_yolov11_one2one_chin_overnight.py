@@ -46,7 +46,7 @@ class Job:
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Launch an overnight YOLOv11 one2one benchmark on multiple GPUs, including optional transformer chin variants, "
+            "Launch an overnight YOLOv11 one2one benchmark on multiple GPUs, using a P3/P4/P5 transformer chin, "
             "then generate a CSV and plots comparing the runs."
         )
     )
@@ -63,7 +63,7 @@ def parse_args():
     parser.add_argument("--reg-max", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--patience", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--full-eval-every", type=int, default=1)
@@ -72,12 +72,12 @@ def parse_args():
     parser.add_argument("--minimum-possible-candidates", type=int, default=7)
     parser.add_argument("--negative-to-positive-ratio", type=float, default=10.0)
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--include-no-chin", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument(
-        "--include-heavy-p3",
-        action="store_true",
-        help="Also run a P3/P4/P5 chin. This is much heavier at cfg512 and may require reducing batch size.",
-    )
+    parser.add_argument("--chin-d-model", type=int, default=128)
+    parser.add_argument("--chin-num-heads", type=int, default=4)
+    parser.add_argument("--chin-num-layers", type=int, default=1)
+    parser.add_argument("--chin-ffn-ratio", type=float, default=2.0)
+    parser.add_argument("--chin-dropout", type=float, default=0.0)
+    parser.add_argument("--chin-residual-scale", type=float, default=0.0)
     parser.add_argument("--poll-seconds", type=float, default=30.0)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -100,23 +100,20 @@ def output_name(source_name: str, loss: str, chin: ChinConfig) -> str:
     return f"{source_name}_one2one_{loss}{chin_suffix(chin)}"
 
 
-def build_chin_configs(include_no_chin: bool, include_heavy_p3: bool) -> list[ChinConfig]:
-    configs: list[ChinConfig] = []
-    if include_no_chin:
-        configs.append(ChinConfig(label="no_chin", use_chin=False))
-
-    configs.extend(
-        [
-            ChinConfig(label="chin_p4p5_d128_l1", use_chin=True, levels=("p4", "p5"), d_model=128, num_heads=4, num_layers=1),
-            ChinConfig(label="chin_p4p5_d128_l2", use_chin=True, levels=("p4", "p5"), d_model=128, num_heads=4, num_layers=2),
-            ChinConfig(label="chin_p4p5_d192_l1", use_chin=True, levels=("p4", "p5"), d_model=192, num_heads=6, num_layers=1),
-        ]
-    )
-
-    if include_heavy_p3:
-        configs.append(ChinConfig(label="chin_p3p4p5_d128_l1", use_chin=True, levels=("p3", "p4", "p5"), d_model=128, num_heads=4, num_layers=1))
-
-    return configs
+def build_chin_configs(args) -> list[ChinConfig]:
+    return [
+        ChinConfig(
+            label=f"chin_p3p4p5_d{args.chin_d_model}_l{args.chin_num_layers}",
+            use_chin=True,
+            levels=("p3", "p4", "p5"),
+            d_model=args.chin_d_model,
+            num_heads=args.chin_num_heads,
+            num_layers=args.chin_num_layers,
+            ffn_ratio=args.chin_ffn_ratio,
+            dropout=args.chin_dropout,
+            residual_scale=args.chin_residual_scale,
+        )
+    ]
 
 
 def add_common_train_args(command: list[str], args, device: str, loss: str):
@@ -172,7 +169,7 @@ def build_jobs(args) -> list[Job]:
     train_script = Path(__file__).with_name("train_yolov11_one2one_head.py")
     source_name = source_name_from_args(args)
     jobs = []
-    for chin in build_chin_configs(args.include_no_chin, args.include_heavy_p3):
+    for chin in build_chin_configs(args):
         for loss in tuple(dict.fromkeys(args.losses)):
             run_dir = root / output_name(source_name, loss, chin)
             name = f"{loss}_{chin.label}"
