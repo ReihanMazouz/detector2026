@@ -29,8 +29,8 @@ class SweepJob:
 
 
 DEFAULT_JOBS = (
-    SweepJob("baseline", eos_coef=0.10, hidden_dim=256, num_queries=100, encoder_layers=2, decoder_layers=3, dim_feedforward=1024),
-    SweepJob("eos_005", eos_coef=0.05, hidden_dim=256, num_queries=100, encoder_layers=2, decoder_layers=3, dim_feedforward=1024),
+    # SweepJob("baseline", eos_coef=0.10, hidden_dim=256, num_queries=100, encoder_layers=2, decoder_layers=3, dim_feedforward=1024),
+    # SweepJob("eos_005", eos_coef=0.05, hidden_dim=256, num_queries=100, encoder_layers=2, decoder_layers=3, dim_feedforward=1024),
     SweepJob("eos_020", eos_coef=0.20, hidden_dim=256, num_queries=100, encoder_layers=2, decoder_layers=3, dim_feedforward=1024),
     SweepJob("queries_150", eos_coef=0.10, hidden_dim=256, num_queries=150, encoder_layers=2, decoder_layers=3, dim_feedforward=1024),
     SweepJob("deeper_4x6", eos_coef=0.10, hidden_dim=256, num_queries=100, encoder_layers=4, decoder_layers=6, dim_feedforward=1024),
@@ -52,8 +52,8 @@ def parse_args():
     parser.add_argument("--res-key", default="cfg512")
     parser.add_argument("--preprocessing", default="none")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--patience", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--full-eval-every", type=int, default=5)

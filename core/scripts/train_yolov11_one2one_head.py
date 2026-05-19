@@ -33,7 +33,7 @@ from detector2026.core.scripts.train_benchmark_suite import (
 )
 from detector2026.core.utils.preprocess import preprocessing_num_channels
 
-
+DEFAULT_DEVICE = 'cuda:1'
 Resolution = Tuple[int, int]
 
 DEFAULT_EPOCHS = 50
@@ -93,7 +93,7 @@ def parse_args():
         default=None,
         help="Directory of the trained YOLOv11 run. best.pt is preferred, then last.pt.",
     )
-    parser.add_argument("--weights", default=None, help="Explicit path to a trained YOLOv11 checkpoint.")
+    parser.add_argument("--weights", default='/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/yolov11n_specificres_cfg512/best.pt', help="Explicit path to a trained YOLOv11 checkpoint.")
     parser.add_argument(
         "--output-dir-parent",
         default=DEFAULT_OUTPUT_DIR_PARENT,
@@ -101,7 +101,7 @@ def parse_args():
     )
     parser.add_argument(
         "--output-dir",
-        default=None,
+        default='/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/one2one_head',
         help="Explicit benchmark root directory. Loss-specific folders are created inside it.",
     )
     parser.add_argument("--scale", choices=sorted(YOLO11_WIDTH_MULT.keys()), default="n")

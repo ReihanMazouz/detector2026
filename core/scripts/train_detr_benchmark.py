@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument("--preprocessing", default="none")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--full-eval-every", type=int, default=5)

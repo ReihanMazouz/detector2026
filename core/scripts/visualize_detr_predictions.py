@@ -23,19 +23,21 @@ from detector2026.core.utils.preprocess import preprocessing_num_channels
 
 
 DEFAULT_RES_KEYS = ["cfg512", "cfg256", "cfg128", "cfg1024", "cfg2048"]
-
+DEFAULT_DATA_DIR = "/data/RAWSIM/RMA/rf_dataset_for_real_validation"
+DEFAULT_OUTPUT_DIR_PARENT = "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/detr_nightly_sweep/baseline"
+CHEKPOINT_PATH = "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/detr_nightly_sweep/baseline/best.pt"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Visualize DETR predictions against ground truth on dataset samples.")
-    parser.add_argument("--data-dir", required=True)
-    parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--data-dir",default=DEFAULT_DATA_DIR,)
+    parser.add_argument("--checkpoint", default=CHEKPOINT_PATH)
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR_PARENT)
     parser.add_argument("--split", default="val", choices=["train", "val", "test"])
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--num-classes", type=int, default=20)
     parser.add_argument("--res-key", default="cfg512", choices=DEFAULT_RES_KEYS)
     parser.add_argument("--preprocessing", default="none")
-    parser.add_argument("--width-mult", type=float, default=0.50)
+    parser.add_argument("--width-mult", type=float, default=0.5)
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--num-queries", type=int, default=100)
     parser.add_argument("--encoder-layers", type=int, default=2)
@@ -45,9 +47,9 @@ def parse_args():
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--score-threshold", type=float, default=0.05)
     parser.add_argument("--top-k", type=int, default=20)
-    parser.add_argument("--num-samples", type=int, default=24)
+    parser.add_argument("--num-samples", type=int, default=12)
     parser.add_argument("--start-index", type=int, default=0)
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--cmap", default="viridis")
     return parser.parse_args()
