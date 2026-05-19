@@ -88,10 +88,11 @@ class TaskAlignedAssigner(nn.Module):
         eps (float): A small value to prevent division by zero.
     """
 
-    def __init__(self, topk=13, num_classes=80, alpha=1.0, beta=6.0, eps=1e-9):
+    def __init__(self, topk=13, num_classes=80, alpha=1.0, beta=6.0, eps=1e-9, minimum_possible_candidates=None):
         """Initialize a TaskAlignedAssigner object with customizable hyperparameters."""
         super().__init__()
         self.topk = topk
+        self.minimum_possible_candidates = minimum_possible_candidates
         self.num_classes = num_classes
         self.alpha = alpha
         self.beta = beta
@@ -160,11 +161,15 @@ class TaskAlignedAssigner(nn.Module):
             fg_mask (torch.Tensor): Foreground mask with shape (bs, num_total_anchors).
             target_gt_idx (torch.Tensor): Target ground truth indices with shape (bs, num_total_anchors).
         """
+        candidate_topk = self._candidate_topk()
         mask_pos, align_metric, overlaps = self.get_pos_mask(
             pd_scores, pd_bboxes, gt_labels, gt_bboxes, anc_points, mask_gt
         )
 
         target_gt_idx, fg_mask, mask_pos = self.select_highest_overlaps(mask_pos, overlaps, self.n_max_boxes)
+        if candidate_topk != self.topk:
+            mask_pos = self.select_topk_candidates(align_metric * mask_pos, topk=self.topk) * mask_pos
+            target_gt_idx, fg_mask, mask_pos = self.select_highest_overlaps(mask_pos, overlaps, self.n_max_boxes)
 
         # Assigned target
         target_labels, target_bboxes, target_scores = self.get_targets(gt_labels, gt_bboxes, target_gt_idx, fg_mask)
@@ -199,7 +204,12 @@ class TaskAlignedAssigner(nn.Module):
         # Get anchor_align metric, (b, max_num_obj, h*w)
         align_metric, overlaps = self.get_box_metrics(pd_scores, pd_bboxes, gt_labels, gt_bboxes, mask_in_gts * mask_gt)
         # Get topk_metric mask, (b, max_num_obj, h*w)
-        mask_topk = self.select_topk_candidates(align_metric, topk_mask=mask_gt.expand(-1, -1, self.topk).bool())
+        candidate_topk = self._candidate_topk()
+        mask_topk = self.select_topk_candidates(
+            align_metric,
+            topk=candidate_topk,
+            topk_mask=mask_gt.expand(-1, -1, candidate_topk).bool(),
+        )
         # Merge all mask to a final mask, (b, max_num_obj, h*w)
         mask_pos = mask_topk * mask_in_gts * mask_gt
 
@@ -252,7 +262,12 @@ class TaskAlignedAssigner(nn.Module):
         """
         return bbox_iou(gt_bboxes, pd_bboxes, xywh=False, CIoU=True).squeeze(-1).clamp_(0)
 
-    def select_topk_candidates(self, metrics, topk_mask=None):
+    def _candidate_topk(self):
+        if self.minimum_possible_candidates is None:
+            return self.topk
+        return max(self.topk, int(self.minimum_possible_candidates))
+
+    def select_topk_candidates(self, metrics, topk_mask=None, topk=None):
         """
         Select the top-k candidates based on the given metrics.
 
@@ -268,16 +283,20 @@ class TaskAlignedAssigner(nn.Module):
             (torch.Tensor): A tensor of shape (b, max_num_obj, h*w) containing the selected top-k candidates.
         """
         # (b, max_num_obj, topk)
-        topk_metrics, topk_idxs = torch.topk(metrics, self.topk, dim=-1, largest=True)
+        topk = self.topk if topk is None else topk
+        topk = min(topk, metrics.shape[-1])
+        topk_metrics, topk_idxs = torch.topk(metrics, topk, dim=-1, largest=True)
         if topk_mask is None:
             topk_mask = (topk_metrics.max(-1, keepdim=True)[0] > self.eps).expand_as(topk_idxs)
+        elif topk_mask.shape[-1] != topk:
+            topk_mask = topk_mask[..., :topk]
         # (b, max_num_obj, topk)
         topk_idxs.masked_fill_(~topk_mask, 0)
 
         # (b, max_num_obj, topk, h*w) -> (b, max_num_obj, h*w)
         count_tensor = torch.zeros(metrics.shape, dtype=torch.int8, device=topk_idxs.device)
         ones = torch.ones_like(topk_idxs[:, :, :1], dtype=torch.int8, device=topk_idxs.device)
-        for k in range(self.topk):
+        for k in range(topk):
             # Expand topk_idxs for each value of k and add 1 at the specified positions
             count_tensor.scatter_add_(-1, topk_idxs[:, :, k : k + 1], ones)
         # Filter invalid bboxes

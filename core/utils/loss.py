@@ -71,6 +71,7 @@ class YOLODetectionLoss:
                  num_classes=80,
                  strides=[8, 16, 32],
                  tal_topk=10,
+                 minimum_possible_candidates=None,
                  device='cpu'):
 
         self.lambda_box = lambda_box
@@ -85,7 +86,13 @@ class YOLODetectionLoss:
         self.no = num_classes + reg_max * 4
         self.use_dfl = reg_max > 1
 
-        self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0)
+        self.assigner = TaskAlignedAssigner(
+            topk=tal_topk,
+            num_classes=self.nc,
+            alpha=0.5,
+            beta=6.0,
+            minimum_possible_candidates=minimum_possible_candidates,
+        )
         self.bbox_loss = BboxLoss(self.reg_max).to(device)
         self.bce = nn.BCEWithLogitsLoss(reduction="none") 
         self.proj = torch.arange(self.reg_max, dtype=torch.float, device=device)
@@ -180,6 +187,7 @@ class SNRYOLODetectionLoss:
                  num_classes=80,
                  strides=[8, 16, 32],
                  tal_topk=10,
+                 minimum_possible_candidates=None,
                  snr_min=-2,
                  device='cpu'):
 
@@ -196,7 +204,13 @@ class SNRYOLODetectionLoss:
         self.use_dfl = reg_max > 1
         self.snr_min = snr_min
 
-        self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0)
+        self.assigner = TaskAlignedAssigner(
+            topk=tal_topk,
+            num_classes=self.nc,
+            alpha=0.5,
+            beta=6.0,
+            minimum_possible_candidates=minimum_possible_candidates,
+        )
         self.bbox_loss = BboxLoss(self.reg_max).to(device)
         self.bce = nn.BCEWithLogitsLoss(reduction="none") 
         self.proj = torch.arange(self.reg_max, dtype=torch.float, device=device)

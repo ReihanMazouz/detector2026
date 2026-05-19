@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import math
+import copy
 
 from ...nn.convs import Conv, DWConv
 from ...nn.blocks import DFL
@@ -115,3 +116,23 @@ class Detect(nn.Module):
 
     #             # only first `nc` biases correspond to class logits
     #             cls_branch[-1].bias.data[:self.nc].fill_(bias_value)
+
+
+class One2OneDetect(nn.Module):
+    """Detect head initialized as a copy of an existing one2many Detect head."""
+
+    def __init__(self, one2many_head: Detect):
+        super().__init__()
+        self.nc = one2many_head.nc
+        self.reg_max = one2many_head.reg_max
+        self.nl = one2many_head.nl
+        self.legacy = one2many_head.legacy
+        self.strides = one2many_head.strides
+        self.cv_dist = copy.deepcopy(one2many_head.cv_dist)
+        self.cv_clsobj = copy.deepcopy(one2many_head.cv_clsobj)
+        self.dfl = copy.deepcopy(one2many_head.dfl)
+
+    def forward(self, *features):
+        dist_outputs = [conv(f) for conv, f in zip(self.cv_dist, features)]
+        clsobj_outputs = [conv(f) for conv, f in zip(self.cv_clsobj, features)]
+        return dist_outputs, clsobj_outputs

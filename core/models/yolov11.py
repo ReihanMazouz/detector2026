@@ -7,7 +7,8 @@ from ..nn.convs import Conv, DWConv
 from ..nn.blocks import C3k2, SPPF, C2PSA, DFL
 from .base import BaseModel
 from ..utils.loss import YOLODetectionLoss
-from .Head.detect import Detect
+from ..utils.tal import make_anchors, dist2bbox
+from .Head.detect import Detect, One2OneDetect
 from .anisotropic_utils import build_anisotropic_standard_plan
 
 
@@ -88,9 +89,20 @@ class YOLOv11(BaseModel):
         )
 
         self.detect.bias_init(image_size=self.input_hw if self.input_hw is not None else 1024)
+        self.detect_one2one = One2OneDetect(self.detect)
+        self.active_head = "one2many"
 
         # Loss
         self.criterion = YOLODetectionLoss(num_classes=num_classes, strides = self.strides, reg_max=self.reg_max, device=self.device,)
+        self.criterion_one2many = self.criterion
+        self.criterion_one2one = YOLODetectionLoss(
+            num_classes=num_classes,
+            strides=self.strides,
+            reg_max=self.reg_max,
+            tal_topk=1,
+            minimum_possible_candidates=7,
+            device=self.device,
+        )
         # self.criterion = SNRYOLODetectionLoss(num_classes=num_classes, strides = self.strides, reg_max=self.reg_max, device=self.device,)
 
         self.to(self.device)
@@ -103,7 +115,7 @@ class YOLOv11(BaseModel):
             return x
         return F.interpolate(x, size=target_hw, mode="nearest")
 
-    def forward(self, x):
+    def forward_features(self, x):
         x = self._prepare_input(x)
         # Backbone
         x = self.conv1(x)
@@ -174,16 +186,115 @@ class YOLOv11(BaseModel):
         p5_out = self.head_c3_4(pl_feat)
         self.debug_shape("p5_out", p5_out)
 
-        # Detect
-        outputs = self.detect(p3_out, p4_out2, p5_out)
+        return p3_out, p4_out2, p5_out
 
-        return outputs
+    def forward(self, x, head=None):
+        p3_out, p4_out2, p5_out = self.forward_features(x)
+        head = self.active_head if head is None else head
+
+        if head == "one2one":
+            return self.detect_one2one(p3_out, p4_out2, p5_out)
+        if head != "one2many":
+            raise ValueError("head must be 'one2many' or 'one2one'.")
+
+        return self.detect(p3_out, p4_out2, p5_out)
+
+    def training_forward(self, imgs):
+        return self(imgs, head=self.active_head)
+
+    def get_training_criterion(self):
+        if self.active_head == "one2one":
+            return self.criterion_one2one
+        return self.criterion
+
+    def train_one2one_head_only(self, minimum_possible_candidates=7, sync_from_one2many=True):
+        """Freeze the existing model and train only the copied one2one detect head."""
+        if sync_from_one2many:
+            self.sync_one2one_from_one2many()
+        self.active_head = "one2one"
+        self.criterion_one2one = YOLODetectionLoss(
+            num_classes=self.num_classes,
+            strides=self.strides,
+            reg_max=self.reg_max,
+            tal_topk=1,
+            minimum_possible_candidates=minimum_possible_candidates,
+            device=self.device,
+        )
+        self.criterion = self.criterion_one2one
+        for param in self.parameters():
+            param.requires_grad = False
+        for param in self.detect_one2one.parameters():
+            param.requires_grad = True
+        self.detect.eval()
+        self.detect_one2one.train()
+
+    def use_one2many_head(self):
+        self.active_head = "one2many"
+        self.criterion = self.criterion_one2many
+
+    def use_one2one_head(self):
+        self.active_head = "one2one"
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.active_head == "one2one":
+            self._set_frozen_parts_eval()
+            self.detect_one2one.train(mode)
+        return self
+
+    def postprocess(self, dist_out, cls_out, feats, conf_thres=0.1, iou_thres=0.1, iou_same_box=0.9, without_nms=False, max_det=300):
+        without_nms = bool(without_nms or self.active_head == "one2one")
+        if not without_nms:
+            return super().postprocess(
+                dist_out,
+                cls_out,
+                feats,
+                conf_thres=conf_thres,
+                iou_thres=iou_thres,
+                iou_same_box=iou_same_box,
+            )
+
+        pred_dist = torch.cat([x.flatten(2) for x in dist_out], dim=2).permute(0, 2, 1)
+        pred_cls = torch.cat([x.flatten(2) for x in cls_out], dim=2).permute(0, 2, 1)
+        batch_size, num_anchors, _ = pred_dist.shape
+
+        anchor_points, stride_tensor = make_anchors(feats, self.strides)
+        anchor_points = anchor_points.to(pred_dist.device)
+        stride_tensor = stride_tensor.to(pred_dist.device)
+        stride_tensor_boxes = torch.cat([stride_tensor, stride_tensor], dim=1)
+
+        if self.reg_max > 1:
+            proj = torch.arange(self.reg_max, dtype=pred_dist.dtype, device=pred_dist.device)
+            pred_ltrb = pred_dist.view(batch_size, num_anchors, 4, self.reg_max).softmax(3).matmul(proj)
+        else:
+            pred_ltrb = pred_dist
+
+        pred_bboxes = dist2bbox(pred_ltrb, anchor_points, xywh=False) * stride_tensor_boxes
+        cls_scores = pred_cls.sigmoid()
+        scores, labels = cls_scores.max(dim=-1)
+
+        results = []
+        for boxes_i, scores_i, labels_i in zip(pred_bboxes, scores, labels):
+            keep = scores_i > conf_thres
+            detections = torch.cat(
+                [boxes_i, scores_i.unsqueeze(1), labels_i.to(dtype=boxes_i.dtype).unsqueeze(1)],
+                dim=1,
+            )[keep]
+            if detections.shape[0] > max_det:
+                detections = detections[detections[:, 4].argsort(descending=True)[:max_det]]
+            results.append(detections)
+        return results
+
+    def _set_frozen_parts_eval(self):
+        for name, module in self.named_children():
+            if name != "detect_one2one":
+                module.eval()
+
+    def sync_one2one_from_one2many(self):
+        self.detect_one2one.cv_dist.load_state_dict(self.detect.cv_dist.state_dict())
+        self.detect_one2one.cv_clsobj.load_state_dict(self.detect.cv_clsobj.state_dict())
+        self.detect_one2one.dfl.load_state_dict(self.detect.dfl.state_dict())
     
     def debug_shape(self, name, tensor):
         if self.debug:
             print(f"[DEBUG] {name:<20} shape = {tuple(tensor.shape)}")
-
-
-
-
-
