@@ -9,6 +9,7 @@ from typing import Any
 
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -18,6 +19,7 @@ from detector2026.core.models.yolov11 import YOLOv11
 from detector2026.core.scripts.train_benchmark_suite import DEFAULT_RES_KEYS, YOLO11_WIDTH_MULT, find_input_resolutions
 from detector2026.core.utils.dataset import YOLODatasetSpecificRes, load_class_index_to_name
 from detector2026.core.utils.divers import xywh2xyxy
+from detector2026.core.utils.evaluate import EvalConfig, EvalRunner
 from detector2026.core.utils.metrics import box_iou
 from detector2026.core.utils.preprocess import preprocessing_num_channels
 
@@ -42,7 +44,10 @@ def parse_chin_levels(value: str) -> tuple[str, ...]:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Visualize YOLOv11 one2many+NMS, one2one TAL, and one2one Hungarian predictions on the same samples."
+        description=(
+            "Evaluate YOLOv11 one2many+NMS, one2one TAL, and one2one Hungarian on the full dataset, "
+            "then visualize the same samples for all three models."
+        )
     )
     parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
@@ -58,11 +63,13 @@ def parse_args():
     parser.add_argument("--preprocessing", default="none")
     parser.add_argument("--score-threshold", type=float, default=0.05)
     parser.add_argument("--top-k", type=int, default=30)
-    parser.add_argument("--num-samples", type=int, default=12)
+    parser.add_argument("--num-samples", type=int, default=10)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--cmap", default="viridis")
+    parser.add_argument("--eval-iou-thresh", type=float, default=0.5)
+    parser.add_argument("--eval-fa-target", type=float, default=0.01)
     parser.add_argument(
         "--use-transformer-chin",
         action="store_true",
@@ -225,35 +232,107 @@ def _load_models(args, output_dir: Path, input_channels: int) -> dict[str, tuple
     return models
 
 
-def main():
-    args = parse_args()
-    output_dir = Path(args.output_dir)
-    input_resolutions = find_input_resolutions(args.data_dir, split=args.split)
-    if len(input_resolutions) != len(DEFAULT_RES_KEYS):
-        raise ValueError(f"Expected {len(DEFAULT_RES_KEYS)} resolutions, found {len(input_resolutions)}: {input_resolutions}")
-    res_key_to_hw = dict(zip(DEFAULT_RES_KEYS, input_resolutions))
-    input_hw = res_key_to_hw[args.res_key]
-    input_channels = preprocessing_num_channels(args.preprocessing)
-    class_names = load_class_index_to_name(args.data_dir)
-
-    dataset = YOLODatasetSpecificRes(
-        data_dir=os.path.join(args.data_dir, args.split, "data"),
-        labels_dir=os.path.join(args.data_dir, args.split, "labels_detect"),
-        res_hw=input_hw,
-        res_key=args.res_key,
-        preprocessing=args.preprocessing,
-    )
-    subset_indices = range(args.start_index, min(len(dataset), args.start_index + args.num_samples))
-    subset = torch.utils.data.Subset(dataset, list(subset_indices))
-    loader = DataLoader(
-        subset,
+def _build_loader(args, dataset, *, subset_indices=None):
+    if subset_indices is not None:
+        dataset = torch.utils.data.Subset(dataset, list(subset_indices))
+    return DataLoader(
+        dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
         collate_fn=YOLODatasetSpecificRes.collate_fn,
+        pin_memory=torch.cuda.is_available() and str(args.device).startswith("cuda"),
+        persistent_workers=args.num_workers > 0,
     )
 
-    models = _load_models(args, output_dir, input_channels)
+
+def _summarize_eval_result(name: str, result: dict[str, Any]) -> dict[str, Any]:
+    full_metrics = result["full_metrics"]
+    values = result["extra_values"]
+    operating_point = full_metrics.get("operating_point", {})
+    model_info = full_metrics.get("model_info", {})
+    return {
+        "model": name,
+        "map50": values[0],
+        "map50_95": values[1],
+        "avg_recall_low_snr": values[2],
+        "avg_recall_medium_snr": values[3],
+        "avg_recall_high_snr": values[4],
+        "conf_thresh": full_metrics.get("conf_thresh"),
+        "tp_at_conf_thresh": operating_point.get("tp_at_conf_thresh"),
+        "fp_at_conf_thresh": operating_point.get("fp_at_conf_thresh"),
+        "fn_total": operating_point.get("fn_total"),
+        "tp_raw": operating_point.get("tp_raw"),
+        "fp_raw": operating_point.get("fp_raw"),
+        "params": model_info.get("params"),
+        "flops": model_info.get("flops"),
+        "metrics_json_path": values[5],
+    }
+
+
+def _write_metrics_csv(path: Path, rows: list[dict[str, Any]]):
+    fieldnames = [
+        "model",
+        "map50",
+        "map50_95",
+        "avg_recall_low_snr",
+        "avg_recall_medium_snr",
+        "avg_recall_high_snr",
+        "conf_thresh",
+        "tp_at_conf_thresh",
+        "fp_at_conf_thresh",
+        "fn_total",
+        "tp_raw",
+        "fp_raw",
+        "params",
+        "flops",
+        "metrics_json_path",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as handle:
+        import csv
+
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _json_default(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().tolist()
+    return str(value)
+
+
+def _evaluate_models(args, output_dir: Path, models: dict[str, tuple[YOLOv11, bool]], eval_loader, class_names, input_hw):
+    metrics_rows = []
+    for name, (model, _) in models.items():
+        print(f"\n[EVAL] {name}")
+        runner = EvalRunner(
+            output_dir=str(output_dir / "metrics" / name),
+            cfg=EvalConfig(iou_thresh=args.eval_iou_thresh, fa_target=args.eval_fa_target, img_size=input_hw),
+            class_index_to_name=class_names,
+        )
+        result = runner.run(epoch=0, model=model, val_loader=eval_loader)
+        summary = _summarize_eval_result(name, result)
+        metrics_rows.append(summary)
+        print(
+            f"       map50={summary['map50']} | map50_95={summary['map50_95']} | "
+            f"conf_thresh={summary['conf_thresh']} | "
+            f"TP/FP/FN={summary['tp_at_conf_thresh']}/{summary['fp_at_conf_thresh']}/{summary['fn_total']}"
+        )
+
+    _write_metrics_csv(output_dir / "metrics_summary.csv", metrics_rows)
+    (output_dir / "metrics_summary.json").write_text(json.dumps(metrics_rows, indent=2, default=_json_default), encoding="utf-8")
+    return metrics_rows
+
+
+def _visualize_samples(args, output_dir: Path, models: dict[str, tuple[YOLOv11, bool]], loader, class_names, input_hw):
     summaries: list[dict[str, Any]] = []
     seen = 0
 
@@ -315,11 +394,44 @@ def main():
                 summaries.append(sample_summary)
                 seen += 1
 
+    return summaries
+
+
+def main():
+    args = parse_args()
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    input_resolutions = find_input_resolutions(args.data_dir, split=args.split)
+    if len(input_resolutions) != len(DEFAULT_RES_KEYS):
+        raise ValueError(f"Expected {len(DEFAULT_RES_KEYS)} resolutions, found {len(input_resolutions)}: {input_resolutions}")
+    res_key_to_hw = dict(zip(DEFAULT_RES_KEYS, input_resolutions))
+    input_hw = res_key_to_hw[args.res_key]
+    input_channels = preprocessing_num_channels(args.preprocessing)
+    class_names = load_class_index_to_name(args.data_dir)
+
+    dataset = YOLODatasetSpecificRes(
+        data_dir=os.path.join(args.data_dir, args.split, "data"),
+        labels_dir=os.path.join(args.data_dir, args.split, "labels_detect"),
+        res_hw=input_hw,
+        res_key=args.res_key,
+        preprocessing=args.preprocessing,
+    )
+    eval_loader = _build_loader(args, dataset)
+    subset_indices = range(args.start_index, min(len(dataset), args.start_index + args.num_samples))
+    visual_loader = _build_loader(args, dataset, subset_indices=subset_indices)
+
+    models = _load_models(args, output_dir, input_channels)
+    metrics_rows = _evaluate_models(args, output_dir, models, eval_loader, class_names, input_hw)
+    summaries = _visualize_samples(args, output_dir, models, visual_loader, class_names, input_hw)
+
     payload = {
         "data_dir": str(args.data_dir),
         "split": args.split,
         "res_key": args.res_key,
         "input_hw": list(input_hw),
+        "dataset_size": len(dataset),
+        "eval_iou_thresh": float(args.eval_iou_thresh),
+        "eval_fa_target": float(args.eval_fa_target),
         "score_threshold": float(args.score_threshold),
         "top_k": int(args.top_k),
         "checkpoints": {
@@ -327,10 +439,11 @@ def main():
             "one2one_tal": args.one2one_tal_checkpoint,
             "one2one_hungarian": args.one2one_hungarian_checkpoint,
         },
+        "metrics": metrics_rows,
         "samples": summaries,
     }
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "summary.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (output_dir / "summary.json").write_text(json.dumps(payload, indent=2, default=_json_default), encoding="utf-8")
+    print(f"Saved full-dataset metrics to {output_dir / 'metrics_summary.csv'}")
     print(f"Saved {len(summaries)} sample visualizations to {output_dir / 'samples'}")
     print(f"Saved summary to {output_dir / 'summary.json'}")
 
