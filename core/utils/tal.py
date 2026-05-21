@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ..utils.metrics import bbox_iou
-from ..models.anisotropic_utils import stride_hw_to_xy
+from ..utils.stride import stride_hw_to_xy
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):
     """Generate anchors from features."""

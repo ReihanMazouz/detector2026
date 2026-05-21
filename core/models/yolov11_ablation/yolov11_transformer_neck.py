@@ -1,17 +1,17 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
-from ..nn.convs import Conv
-from ..nn.blocks import C3k2, SPPF, C2PSA
-from .base import BaseModel
-from ..utils.loss import YOLODetectionLoss, YOLOOne2OneHungarianLoss
-from ..utils.tal import make_anchors, dist2bbox
-from .Head.detect import Detect, One2OneDetect
-from .anisotropic_utils import build_anisotropic_standard_plan
+from ...nn.convs import Conv
+from ...nn.blocks import C3k2, SPPF, C2PSA
+from ..base import BaseModel
+from ...utils.loss import YOLODetectionLoss, YOLOOne2OneHungarianLoss
+from ...utils.tal import make_anchors, dist2bbox
+from ..Head.detect import Detect, One2OneDetect
+from ..Neck import TransformerPyramidNeck
+from ..anisotropic_utils import build_anisotropic_standard_plan
 
 
-class YOLOv11(BaseModel):
+class YOLOv11TransformerNeck(BaseModel):
     def __init__(
         self,
         output_dir,
@@ -25,6 +25,12 @@ class YOLOv11(BaseModel):
         anisotropic=False,
         p3_size=(64, 64),
         input_hw=None,
+        transformer_d_model=128,
+        transformer_num_heads=4,
+        transformer_num_layers=1,
+        transformer_ffn_ratio=2.0,
+        transformer_dropout=0.0,
+        transformer_residual_scale=0.0,
     ):
         super().__init__(device=device, output_dir=output_dir)
         self.num_classes = num_classes
@@ -68,14 +74,16 @@ class YOLOv11(BaseModel):
         self.sppf = SPPF(c5, c5)
         self.attn = C2PSA(c1=c5, c2=c5, n=2, e=0.5)
 
-        # ---------------- Neck classique FPN/PAN ----------------
-        self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
-        self.head_c3_1 = C3k2(c5 + c4, c4, shortcut=False)
-        self.head_c3_2 = C3k2(c4 + c3, c3, shortcut=False)
-        self.down_p3 = Conv(c3, c3, k=3, s=2)
-        self.head_c3_3 = C3k2(c3 + c4, c4, shortcut=False)
-        self.down_p4 = Conv(c4, c4, k=3, s=2)
-        self.head_c3_4 = C3k2(c4 + c5, c5, shortcut=True)
+        # ---------------- Transformer Neck ----------------
+        self.neck = TransformerPyramidNeck(
+            in_channels=[c3, c4, c5],
+            d_model=transformer_d_model,
+            num_heads=transformer_num_heads,
+            num_layers=transformer_num_layers,
+            ffn_ratio=transformer_ffn_ratio,
+            dropout=transformer_dropout,
+            residual_scale=transformer_residual_scale,
+        )
 
         # ---------------- Detect ----------------
         self.detect = Detect(
@@ -147,41 +155,10 @@ class YOLOv11(BaseModel):
         f5 = self.attn(x)
         self.debug_shape("attn (f5)", f5)
 
-        p5_up = self.upsample(f5)
-        self.debug_shape("p5_up", p5_up)
-
-        p4_feat = torch.cat([p5_up, f4], dim=1)
-        self.debug_shape("p4_feat", p4_feat)
-
-        p4_out = self.head_c3_1(p4_feat)
-        self.debug_shape("p4_out", p4_out)
-
-        p4_up = self.upsample(p4_out)
-        self.debug_shape("p4_up", p4_up)
-
-        p3_feat = torch.cat([p4_up, f3], dim=1)
-        self.debug_shape("p3_feat", p3_feat)
-
-        p3_out = self.head_c3_2(p3_feat)
-        self.debug_shape("p3_out", p3_out)
-
-        p3_down = self.down_p3(p3_out)
-        self.debug_shape("p3_down", p3_down)
-
-        pm_feat = torch.cat([p3_down, p4_out], dim=1)
-        self.debug_shape("pm_feat", pm_feat)
-
-        p4_out2 = self.head_c3_3(pm_feat)
-        self.debug_shape("p4_out2", p4_out2)
-
-        p4_down = self.down_p4(p4_out2)
-        self.debug_shape("p4_down", p4_down)
-
-        pl_feat = torch.cat([p4_down, f5], dim=1)
-        self.debug_shape("pl_feat", pl_feat)
-
-        p5_out = self.head_c3_4(pl_feat)
-        self.debug_shape("p5_out", p5_out)
+        p3_out, p4_out2, p5_out = self.neck(f3, f4, f5)
+        self.debug_shape("transformer_neck p3_out", p3_out)
+        self.debug_shape("transformer_neck p4_out2", p4_out2)
+        self.debug_shape("transformer_neck p5_out", p5_out)
 
         return p3_out, p4_out2, p5_out
 
@@ -210,8 +187,9 @@ class YOLOv11(BaseModel):
         sync_from_one2many=True,
         loss_type="tal",
         negative_to_positive_ratio=1.0,
+        train_neck=True,
     ):
-        """Freeze the existing model and train only the copied one2one detect head."""
+        """Freeze the existing model and train the one2one head, optionally with the transformer neck."""
         if sync_from_one2many:
             self.sync_one2one_from_one2many()
         self.active_head = "one2one"
@@ -235,12 +213,17 @@ class YOLOv11(BaseModel):
             )
         else:
             raise ValueError("loss_type must be 'tal' or 'hungarian'.")
+
         self.criterion = self.criterion_one2one
         for param in self.parameters():
             param.requires_grad = False
+        if train_neck:
+            for param in self.neck.parameters():
+                param.requires_grad = True
         for param in self.detect_one2one.parameters():
             param.requires_grad = True
         self.detect.eval()
+        self.neck.train(train_neck)
         self.detect_one2one.train()
 
     def use_one2many_head(self):
@@ -312,7 +295,7 @@ class YOLOv11(BaseModel):
 
     def _set_frozen_parts_eval(self):
         for name, module in self.named_children():
-            if name != "detect_one2one":
+            if name not in {"detect_one2one", "neck"}:
                 module.eval()
 
     def sync_one2one_from_one2many(self):
