@@ -277,7 +277,13 @@ class YOLOv11RTDETRHead(YOLOv11):
         bad_epochs = 0
         for epoch in range(1, int(epochs) + 1):
             start = time.perf_counter()
-            train_loss = self._run_one2one_epoch(train_loader, optimizer, scaler, train=True, desc=f"Epoch {epoch} RTDETR train")
+            train_loss, _ = self._run_one2one_epoch(
+                train_loader,
+                optimizer,
+                scaler,
+                train=True,
+                desc=f"Epoch {epoch} RTDETR train",
+            )
             val_loss, val_parts = self._run_one2one_epoch(val_loader, None, scaler, train=False, desc=f"Epoch {epoch} RTDETR val")
             should_eval = bool(run_full_eval) and (
                 (epoch % max(1, int(full_eval_every)) == 0) or epoch == int(epochs)
