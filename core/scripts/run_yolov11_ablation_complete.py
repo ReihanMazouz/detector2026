@@ -58,13 +58,13 @@ def parse_args():
     parser.add_argument("--width-mult", type=float, default=0.25)
 
     parser.add_argument("--epochs", type=int, default=300)
-    parser.add_argument("--one2one-epochs", type=int, default=50)
+    parser.add_argument("--one2one-epochs", type=int, default=300)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--one2one-batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--one2one-lr", type=float, default=1e-4)
-    parser.add_argument("--patience", type=int, default=10)
-    parser.add_argument("--one2one-patience", type=int, default=10)
+    parser.add_argument("--patience", type=int, default=100)
+    parser.add_argument("--one2one-patience", type=int, default=100)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--full-eval-every", type=int, default=5)
     parser.add_argument("--save-last-every", type=int, default=5)
@@ -75,7 +75,7 @@ def parse_args():
 
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--num-queries", type=int, default=300)
-    parser.add_argument("--num-decoder-layers", type=int, default=3)
+    parser.add_argument("--num-decoder-layers", type=int, default=6)
     parser.add_argument("--num-heads", type=int, default=8)
     parser.add_argument("--num-decoder-points", type=int, default=4)
     parser.add_argument("--dim-feedforward", type=int, default=1024)
@@ -88,7 +88,6 @@ def parse_args():
     parser.add_argument("--transformer-neck-dropout", type=float, default=0.0)
     parser.add_argument("--transformer-neck-residual-scale", type=float, default=0.0)
 
-    parser.add_argument("--skip-one2one-dense", action="store_true")
     parser.add_argument("--skip-one2one-deformable", action="store_true")
     parser.add_argument("--skip-rtdetr-full", action="store_true")
     parser.add_argument("--skip-transformer-neck", action="store_true")
@@ -156,11 +155,10 @@ def build_rtdetr_head_ablation(args, output_dir: Path, *, device: str, input_cha
     )
 
 
-def run_one2one_rtdetr_head(args, input_channels: int, *, deformable: bool):
-    suffix = "deformable" if deformable else "dense"
-    name = f"yolov11n_best_ft_rtdetr_head_one2one_{suffix}"
+def run_one2one_rtdetr_head(args, input_channels: int):
+    name = "yolov11n_best_ft_rtdetr_head_one2one_deformable"
     output_dir = Path(args.output_root) / name
-    if (deformable and args.skip_one2one_deformable) or ((not deformable) and args.skip_one2one_dense):
+    if args.skip_one2one_deformable:
         return
     if should_skip(name, output_dir, args.overwrite):
         return
@@ -176,7 +174,7 @@ def run_one2one_rtdetr_head(args, input_channels: int, *, deformable: bool):
         output_dir,
         device=args.one2one_device,
         input_channels=input_channels,
-        deformable=deformable,
+        deformable=True,
     )
     try:
         missing, unexpected = model.load_yolov11_weights(str(weights_path), device=args.one2one_device, eval_mode=False)
@@ -275,14 +273,6 @@ def run_transformer_neck(args, input_channels: int):
 def experiment_specs(args, input_channels: int):
     root = Path(args.output_root)
     return [
-        {
-            "name": "yolov11n_best_ft_rtdetr_head_one2one_dense",
-            "kind": "rtdetr_one2one",
-            "output_dir": root / "yolov11n_best_ft_rtdetr_head_one2one_dense",
-            "build": lambda output_dir, device: build_rtdetr_head_ablation(
-                args, output_dir, device=device, input_channels=input_channels, deformable=False
-            ),
-        },
         {
             "name": "yolov11n_best_ft_rtdetr_head_one2one_deformable",
             "kind": "rtdetr_one2one",
@@ -809,7 +799,6 @@ def main():
     print(f"  patience = {args.patience}")
     print(f"  one2one_patience = {args.one2one_patience}")
     print("  experiments:")
-    print(f"    - YOLOv11 best -> RTDETR one2one dense head on {args.one2one_device}")
     print(f"    - YOLOv11 best -> RTDETR one2one deformable head on {args.one2one_device}")
     print(f"    - RTDETR with YOLOv11 backbone and RTDETR hybrid neck on {args.rtdetr_device}")
     print(f"    - transformer neck full training on {args.transformer_neck_device}")
@@ -818,8 +807,7 @@ def main():
         return
 
     Path(args.output_root).mkdir(parents=True, exist_ok=True)
-    run_one2one_rtdetr_head(args, input_channels, deformable=False)
-    run_one2one_rtdetr_head(args, input_channels, deformable=True)
+    run_one2one_rtdetr_head(args, input_channels)
     run_full_rtdetr(args, input_channels)
     run_transformer_neck(args, input_channels)
     if not args.skip_comparison:

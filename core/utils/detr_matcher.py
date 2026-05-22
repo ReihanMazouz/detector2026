@@ -28,11 +28,15 @@ class HungarianMatcher:
         cost_bbox: float = 5.0,
         cost_giou: float = 2.0,
         use_focal_loss: bool = False,
+        focal_alpha: float = 0.25,
+        focal_gamma: float = 2.0,
     ):
         self.cost_class = float(cost_class)
         self.cost_bbox = float(cost_bbox)
         self.cost_giou = float(cost_giou)
         self.use_focal_loss = bool(use_focal_loss)
+        self.focal_alpha = float(focal_alpha)
+        self.focal_gamma = float(focal_gamma)
         if self.cost_class == 0.0 and self.cost_bbox == 0.0 and self.cost_giou == 0.0:
             raise ValueError("At least one matching cost must be non-zero.")
 
@@ -50,8 +54,15 @@ class HungarianMatcher:
                 indices.append((empty, empty))
                 continue
 
-            out_prob = logits[batch_index].sigmoid() if self.use_focal_loss else logits[batch_index].softmax(-1)
-            cost_class = -out_prob[:, tgt_labels]
+            if self.use_focal_loss:
+                pred_scores = logits[batch_index].sigmoid().clamp(1e-8, 1.0 - 1e-8)
+                pred_scores = pred_scores[:, tgt_labels]
+                neg_cost = (1.0 - self.focal_alpha) * pred_scores.pow(self.focal_gamma) * (-(1.0 - pred_scores).log())
+                pos_cost = self.focal_alpha * (1.0 - pred_scores).pow(self.focal_gamma) * (-pred_scores.log())
+                cost_class = pos_cost - neg_cost
+            else:
+                out_prob = logits[batch_index].softmax(-1)
+                cost_class = -out_prob[:, tgt_labels]
             cost_bbox = torch.cdist(boxes[batch_index], tgt_boxes, p=1)
             cost_giou = -generalized_box_iou(
                 xywh2xyxy(boxes[batch_index]),

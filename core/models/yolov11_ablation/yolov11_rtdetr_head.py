@@ -30,7 +30,7 @@ class YOLOv11RTDETRHead(YOLOv11):
         num_decoder_layers=3,
         num_heads=8,
         num_decoder_points=4,
-        use_deformable_attention=False,
+        use_deformable_attention=True,
         dim_feedforward=1024,
         dropout=0.0,
         learnt_init_query=False,
@@ -363,6 +363,7 @@ class YOLOv11RTDETRHead(YOLOv11):
                 module.eval()
 
     def sync_one2one_from_one2many(self):
+        self.detect_one2one.cv_dist.load_state_dict(self.detect.cv_dist.state_dict())
         self.detect_one2one.dfl.load_state_dict(self.detect.dfl.state_dict())
 
     def load_yolov11_weights(self, weights_path: str, device="cpu", eval_mode=True):
@@ -380,7 +381,7 @@ class YOLOv11RTDETRHead(YOLOv11):
         try:
             self.sync_one2one_from_one2many()
         except RuntimeError as exc:
-            print(f"[WARN] Could not sync one2one DFL weights from YOLOv11 checkpoint: {exc}")
+            print(f"[WARN] Could not sync one2one bbox-reference weights from YOLOv11 checkpoint: {exc}")
         if eval_mode:
             self.eval()
         return missing_keys, unexpected_keys

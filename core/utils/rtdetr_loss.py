@@ -16,6 +16,7 @@ class RTDETRLoss(DETRLoss):
         cls_loss_type: str = "varifocal",
         vfl_alpha: float = 0.75,
         vfl_gamma: float = 2.0,
+        aux_loss: bool = True,
     ):
         super().__init__(
             num_classes=num_classes,
@@ -24,7 +25,7 @@ class RTDETRLoss(DETRLoss):
             lambda_cls=lambda_cls,
             lambda_bbox=lambda_bbox,
             lambda_giou=lambda_giou,
-            aux_loss=False,
+            aux_loss=aux_loss,
             cls_loss_type=cls_loss_type,
             vfl_alpha=vfl_alpha,
             vfl_gamma=vfl_gamma,
