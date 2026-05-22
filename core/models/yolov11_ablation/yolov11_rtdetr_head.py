@@ -113,7 +113,10 @@ class YOLOv11RTDETRHead(YOLOv11):
 
         logits = outputs["pred_logits"]
         boxes = outputs["pred_boxes"]
-        probs = logits.softmax(-1)[..., : self.num_classes]
+        if getattr(self.criterion_one2one, "cls_loss_type", "ce") == "varifocal":
+            probs = logits[..., : self.num_classes].sigmoid()
+        else:
+            probs = logits.softmax(-1)[..., : self.num_classes]
         scores, labels = probs.max(dim=-1)
 
         if self.input_hw is not None:

@@ -5,19 +5,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .detr_matcher import HungarianMatcher
+from .detr_matcher import _sanitize_xywh
 from .divers import xywh2xyxy
 from .metrics import bbox_iou
 
 
 def targets_from_yolo_tensor(targets: torch.Tensor, batch_size: int, device: torch.device) -> list[dict[str, torch.Tensor]]:
-    targets = targets.to(device)
+    targets = torch.nan_to_num(targets.to(device), nan=0.0, posinf=1.0, neginf=0.0)
     packed = []
     for batch_index in range(batch_size):
         rows = targets[targets[:, 0].long() == batch_index]
         packed.append(
             {
                 "labels": rows[:, 1].long(),
-                "boxes": rows[:, 2:6].to(dtype=torch.float32).clamp(0.0, 1.0),
+                "boxes": _sanitize_xywh(rows[:, 2:6].to(dtype=torch.float32)),
             }
         )
     return packed
@@ -34,6 +35,9 @@ class DETRLoss(nn.Module):
         lambda_giou: float = 2.0,
         aux_loss: bool = True,
         aux_loss_weight: float = 1.0,
+        cls_loss_type: str = "ce",
+        vfl_alpha: float = 0.75,
+        vfl_gamma: float = 2.0,
     ):
         super().__init__()
         self.num_classes = int(num_classes)
@@ -43,10 +47,62 @@ class DETRLoss(nn.Module):
         self.lambda_giou = float(lambda_giou)
         self.aux_loss = bool(aux_loss)
         self.aux_loss_weight = float(aux_loss_weight)
+        self.cls_loss_type = str(cls_loss_type).lower()
+        self.vfl_alpha = float(vfl_alpha)
+        self.vfl_gamma = float(vfl_gamma)
+        if self.cls_loss_type not in {"ce", "varifocal"}:
+            raise ValueError("cls_loss_type must be 'ce' or 'varifocal'.")
 
         empty_weight = torch.ones(self.num_classes + 1)
         empty_weight[-1] = float(eos_coef)
         self.register_buffer("empty_weight", empty_weight)
+
+    def _loss_classification(
+        self,
+        pred_logits: torch.Tensor,
+        pred_boxes: torch.Tensor,
+        targets: list[dict[str, torch.Tensor]],
+        indices,
+        idx,
+    ) -> torch.Tensor:
+        if self.cls_loss_type == "ce":
+            pred_logits = torch.nan_to_num(pred_logits, nan=0.0, posinf=50.0, neginf=-50.0)
+            target_classes = torch.full(
+                pred_logits.shape[:2],
+                self.num_classes,
+                dtype=torch.int64,
+                device=pred_logits.device,
+            )
+            if idx[0].numel() > 0:
+                target_classes_o = torch.cat([target["labels"][j] for target, (_, j) in zip(targets, indices)])
+                target_classes[idx] = target_classes_o
+            return F.cross_entropy(pred_logits.transpose(1, 2), target_classes, self.empty_weight)
+
+        class_logits = torch.nan_to_num(pred_logits[..., : self.num_classes], nan=0.0, posinf=50.0, neginf=-50.0)
+        cls_targets = torch.zeros_like(class_logits)
+        num_pos = torch.as_tensor(0.0, device=pred_logits.device, dtype=pred_logits.dtype)
+        if idx[0].numel() > 0:
+            target_labels = torch.cat([target["labels"][j] for target, (_, j) in zip(targets, indices)])
+            target_boxes = _sanitize_xywh(torch.cat([target["boxes"][j] for target, (_, j) in zip(targets, indices)], dim=0))
+            src_boxes = _sanitize_xywh(pred_boxes[idx].detach())
+            target_quality = bbox_iou(
+                xywh2xyxy(src_boxes),
+                xywh2xyxy(target_boxes),
+                xywh=False,
+            ).squeeze(-1)
+            target_quality = torch.nan_to_num(target_quality, nan=0.0, posinf=1.0, neginf=0.0).clamp_(0.0, 1.0)
+            cls_targets[idx[0], idx[1], target_labels] = target_quality.to(cls_targets.dtype)
+            num_pos = torch.as_tensor(float(target_labels.numel()), device=pred_logits.device, dtype=pred_logits.dtype)
+
+        pred_prob = class_logits.detach().sigmoid()
+        cls_weights = torch.where(
+            cls_targets > 0,
+            cls_targets,
+            self.vfl_alpha * pred_prob.pow(self.vfl_gamma),
+        )
+        return (
+            F.binary_cross_entropy_with_logits(class_logits, cls_targets, reduction="none") * cls_weights
+        ).sum() / num_pos.clamp(min=1.0)
 
     @staticmethod
     def _get_src_permutation_idx(indices):
@@ -59,28 +115,18 @@ class DETRLoss(nn.Module):
 
     def _loss_single(self, outputs: dict[str, torch.Tensor], targets: list[dict[str, torch.Tensor]]):
         indices = self.matcher(outputs, targets)
-        pred_logits = outputs["pred_logits"]
-        pred_boxes = outputs["pred_boxes"]
+        pred_logits = torch.nan_to_num(outputs["pred_logits"], nan=0.0, posinf=50.0, neginf=-50.0)
+        pred_boxes = _sanitize_xywh(outputs["pred_boxes"])
         idx = self._get_src_permutation_idx(indices)
 
-        target_classes = torch.full(
-            pred_logits.shape[:2],
-            self.num_classes,
-            dtype=torch.int64,
-            device=pred_logits.device,
-        )
-        if idx[0].numel() > 0:
-            target_classes_o = torch.cat([target["labels"][j] for target, (_, j) in zip(targets, indices)])
-            target_classes[idx] = target_classes_o
-
-        loss_cls = F.cross_entropy(pred_logits.transpose(1, 2), target_classes, self.empty_weight)
+        loss_cls = self._loss_classification(pred_logits, pred_boxes, targets, indices, idx)
         num_boxes = max(float(sum(len(target["labels"]) for target in targets)), 1.0)
         if idx[0].numel() == 0:
             loss_bbox = pred_boxes.sum() * 0.0
             loss_giou = pred_boxes.sum() * 0.0
         else:
             src_boxes = pred_boxes[idx]
-            target_boxes = torch.cat([target["boxes"][j] for target, (_, j) in zip(targets, indices)], dim=0)
+            target_boxes = _sanitize_xywh(torch.cat([target["boxes"][j] for target, (_, j) in zip(targets, indices)], dim=0))
             loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction="sum") / num_boxes
             giou = bbox_iou(
                 xywh2xyxy(src_boxes),
@@ -88,7 +134,8 @@ class DETRLoss(nn.Module):
                 xywh=False,
                 GIoU=True,
             )
-            loss_giou = (1.0 - giou.diag()).sum() / num_boxes
+            giou = torch.nan_to_num(giou.squeeze(-1), nan=-1.0, posinf=1.0, neginf=-1.0).clamp(-1.0, 1.0)
+            loss_giou = (1.0 - giou).sum() / num_boxes
 
         total = self.lambda_cls * loss_cls + self.lambda_bbox * loss_bbox + self.lambda_giou * loss_giou
         return total, {

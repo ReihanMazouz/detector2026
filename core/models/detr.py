@@ -231,8 +231,11 @@ class DETR(BaseModel):
     ) -> list[dict[str, torch.Tensor]]:
         logits = outputs["pred_logits"]
         boxes = outputs["pred_boxes"]
-        probs = logits.softmax(-1)
-        scores, labels = probs[..., :-1].max(dim=-1)
+        if getattr(self.criterion, "cls_loss_type", "ce") == "varifocal":
+            probs = logits[..., : self.num_classes].sigmoid()
+        else:
+            probs = logits.softmax(-1)[..., : self.num_classes]
+        scores, labels = probs.max(dim=-1)
 
         processed = []
         for batch_scores, batch_labels, batch_boxes in zip(scores, labels, boxes):

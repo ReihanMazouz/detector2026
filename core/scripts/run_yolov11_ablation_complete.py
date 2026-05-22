@@ -15,7 +15,6 @@ from torch.utils.data import DataLoader
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from detector2026.core.models.yolov11_ablation import (
-    YOLOv11NoNeck,
     YOLOv11RTDETR,
     YOLOv11RTDETRHead,
     YOLOv11TransformerNeck,
@@ -27,10 +26,10 @@ from detector2026.core.utils.metrics import box_iou
 from detector2026.core.utils.preprocess import preprocessing_num_channels
 
 
-DEFAULT_DATA_DIR = "/data/RAWSIM/RMA/rf_dataset_thesis"
-DEFAULT_OUTPUT_ROOT = "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_ablation_complete"
+DEFAULT_DATA_DIR = "/data/RAWSIM/RMA/rf_dataset_for_real_validation"
+DEFAULT_OUTPUT_ROOT = "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_for_real_validation/yolov11n_ablation_complete"
 DEFAULT_YOLOV11_BEST = (
-    "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/"
+    "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_for_real_validation/"
     "yolov11n_specificres_cfg512/best.pt"
 )
 
@@ -70,7 +69,6 @@ def parse_args():
     parser.add_argument("--full-eval-every", type=int, default=5)
     parser.add_argument("--save-last-every", type=int, default=5)
 
-    parser.add_argument("--no-neck-device", default="cuda:1")
     parser.add_argument("--one2one-device", default="cuda:0")
     parser.add_argument("--rtdetr-device", default="cuda:0")
     parser.add_argument("--transformer-neck-device", default="cuda:0")
@@ -90,7 +88,6 @@ def parse_args():
     parser.add_argument("--transformer-neck-dropout", type=float, default=0.0)
     parser.add_argument("--transformer-neck-residual-scale", type=float, default=0.0)
 
-    parser.add_argument("--skip-no-neck", action="store_true")
     parser.add_argument("--skip-one2one-dense", action="store_true")
     parser.add_argument("--skip-one2one-deformable", action="store_true")
     parser.add_argument("--skip-rtdetr-full", action="store_true")
@@ -138,27 +135,6 @@ def fit_yolo_model(model, args, *, epochs, batch_size, lr, patience):
         monitor="val_loss",
         run_full_eval=True,
     )
-
-
-def run_no_neck(args, input_channels: int):
-    name = "yolov11n_no_neck_direct_p3p4p5"
-    output_dir = Path(args.output_root) / name
-    if args.skip_no_neck or should_skip(name, output_dir, args.overwrite):
-        return
-    print(f"\n[RUN] {name} on {args.no_neck_device}")
-    model = YOLOv11NoNeck(
-        output_dir=str(output_dir),
-        num_classes=args.num_classes,
-        reg_max=args.reg_max,
-        device=args.no_neck_device,
-        input_canals=input_channels,
-        width_mult=args.width_mult,
-    )
-    try:
-        fit_yolo_model(model, args, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, patience=args.patience)
-    finally:
-        del model
-        cleanup()
 
 
 def build_rtdetr_head_ablation(args, output_dir: Path, *, device: str, input_channels: int, deformable: bool):
@@ -299,19 +275,6 @@ def run_transformer_neck(args, input_channels: int):
 def experiment_specs(args, input_channels: int):
     root = Path(args.output_root)
     return [
-        {
-            "name": "yolov11n_no_neck_direct_p3p4p5",
-            "kind": "yolo",
-            "output_dir": root / "yolov11n_no_neck_direct_p3p4p5",
-            "build": lambda output_dir, device: YOLOv11NoNeck(
-                output_dir=str(output_dir),
-                num_classes=args.num_classes,
-                reg_max=args.reg_max,
-                device=device,
-                input_canals=input_channels,
-                width_mult=args.width_mult,
-            ),
-        },
         {
             "name": "yolov11n_best_ft_rtdetr_head_one2one_dense",
             "kind": "rtdetr_one2one",
@@ -846,7 +809,6 @@ def main():
     print(f"  patience = {args.patience}")
     print(f"  one2one_patience = {args.one2one_patience}")
     print("  experiments:")
-    print(f"    - no neck direct P3/P4/P5 on {args.no_neck_device}")
     print(f"    - YOLOv11 best -> RTDETR one2one dense head on {args.one2one_device}")
     print(f"    - YOLOv11 best -> RTDETR one2one deformable head on {args.one2one_device}")
     print(f"    - RTDETR with YOLOv11 backbone and RTDETR hybrid neck on {args.rtdetr_device}")
@@ -856,7 +818,6 @@ def main():
         return
 
     Path(args.output_root).mkdir(parents=True, exist_ok=True)
-    run_no_neck(args, input_channels)
     run_one2one_rtdetr_head(args, input_channels, deformable=False)
     run_one2one_rtdetr_head(args, input_channels, deformable=True)
     run_full_rtdetr(args, input_channels)

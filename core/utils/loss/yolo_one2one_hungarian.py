@@ -19,6 +19,10 @@ class YOLOOne2OneHungarianLoss:
         cost_bbox=5.0,
         cost_giou=2.0,
         negative_to_positive_ratio=1.0,
+        cls_loss_type="varifocal",
+        vfl_alpha=0.75,
+        vfl_gamma=2.0,
+        iou_class_target=True,
         num_classes=80,
         strides=[8, 16, 32],
         device="cpu",
@@ -30,6 +34,10 @@ class YOLOOne2OneHungarianLoss:
         self.cost_bbox = float(cost_bbox)
         self.cost_giou = float(cost_giou)
         self.negative_to_positive_ratio = float(negative_to_positive_ratio)
+        self.cls_loss_type = str(cls_loss_type).lower()
+        self.vfl_alpha = float(vfl_alpha)
+        self.vfl_gamma = float(vfl_gamma)
+        self.iou_class_target = bool(iou_class_target)
         self.nc = num_classes
         self.strides = strides
         self.device = device
@@ -38,6 +46,8 @@ class YOLOOne2OneHungarianLoss:
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
         self.proj = torch.arange(self.reg_max, dtype=torch.float, device=device)
+        if self.cls_loss_type not in {"bce", "varifocal"}:
+            raise ValueError("cls_loss_type must be 'bce' or 'varifocal'.")
 
     def preprocess(self, targets, batch_size, scale_tensor):
         nl, ne = targets.shape
@@ -135,7 +145,15 @@ class YOLOOne2OneHungarianLoss:
             boxes_norm_b = boxes_abs_b / scale_tensor
             boxes_grid_b = boxes_abs_b / stride_tensor_boxes[src_idx]
 
-            cls_targets[b, src_idx, labels_b] = 1.0
+            if self.iou_class_target:
+                target_quality = bbox_iou(
+                    pred_bboxes_norm[b, src_idx].detach(),
+                    boxes_norm_b,
+                    xywh=False,
+                ).squeeze(-1).clamp_(0.0, 1.0)
+            else:
+                target_quality = torch.ones_like(labels_b, dtype=dtype)
+            cls_targets[b, src_idx, labels_b] = target_quality.to(cls_targets.dtype)
             fg_mask[b, src_idx] = True
 
             matched_pred_batches.append(torch.full_like(src_idx, b))
@@ -144,15 +162,25 @@ class YOLOOne2OneHungarianLoss:
             matched_target_boxes_grid.append(boxes_grid_b)
             matched_target_labels.append(labels_b)
 
-        num_pos_logits = cls_targets.sum().clamp(min=1.0)
-        num_neg_logits = (cls_targets.numel() - cls_targets.sum()).clamp(min=1.0)
-        neg_weight = self.negative_to_positive_ratio * num_pos_logits / num_neg_logits
-        cls_weights = torch.where(
-            cls_targets > 0,
-            torch.ones_like(cls_targets),
-            torch.full_like(cls_targets, neg_weight),
-        )
-        loss_cls = (self.bce(pred_scores, cls_targets.to(dtype)) * cls_weights).sum() / cls_weights.sum().clamp(min=1.0)
+        num_pos_logits = fg_mask.sum().to(dtype).clamp(min=1.0)
+        if self.cls_loss_type == "varifocal":
+            pred_prob = pred_scores.detach().sigmoid()
+            cls_weights = torch.where(
+                cls_targets > 0,
+                cls_targets,
+                self.vfl_alpha * pred_prob.pow(self.vfl_gamma) * self.negative_to_positive_ratio,
+            )
+            loss_cls = (self.bce(pred_scores, cls_targets.to(dtype)) * cls_weights).sum() / num_pos_logits
+        else:
+            num_target_score = cls_targets.sum().clamp(min=1.0)
+            num_neg_logits = (cls_targets.numel() - (cls_targets > 0).sum()).to(dtype).clamp(min=1.0)
+            neg_weight = self.negative_to_positive_ratio * num_target_score / num_neg_logits
+            cls_weights = torch.where(
+                cls_targets > 0,
+                torch.ones_like(cls_targets),
+                torch.full_like(cls_targets, neg_weight),
+            )
+            loss_cls = (self.bce(pred_scores, cls_targets.to(dtype)) * cls_weights).sum() / cls_weights.sum().clamp(min=1.0)
         loss_box = pred_bboxes_norm.sum() * 0.0
         loss_dfl = pred_bboxes_norm.sum() * 0.0
         if matched_pred_indices:
