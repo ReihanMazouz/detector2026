@@ -315,6 +315,27 @@ def experiment_specs(args, input_channels: int):
             ),
         },
         {
+            "name": "yolov11n_transformer_neck_deformable_full_train",
+            "kind": "yolo",
+            "output_dir": root / "yolov11n_transformer_neck_deformable_full_train",
+            "build": lambda output_dir, device: YOLOv11TransformerNeck(
+                output_dir=str(output_dir),
+                num_classes=args.num_classes,
+                reg_max=args.reg_max,
+                device=device,
+                input_canals=input_channels,
+                width_mult=args.width_mult,
+                transformer_d_model=args.transformer_neck_d_model,
+                transformer_num_heads=args.transformer_neck_num_heads,
+                transformer_num_layers=args.transformer_neck_num_layers,
+                transformer_ffn_ratio=args.transformer_neck_ffn_ratio,
+                transformer_dropout=args.transformer_neck_dropout,
+                transformer_residual_scale=args.transformer_neck_residual_scale,
+                transformer_neck_type="deformable",
+                transformer_num_points=args.transformer_neck_num_points,
+            ),
+        },
+        {
             "name": "yolov11n_rtdetr_yolov11_backbone_full_train",
             "kind": "rtdetr_full",
             "output_dir": root / "yolov11n_rtdetr_yolov11_backbone_full_train",
@@ -353,27 +374,6 @@ def experiment_specs(args, input_channels: int):
                 transformer_dropout=args.transformer_neck_dropout,
                 transformer_residual_scale=args.transformer_neck_residual_scale,
                 transformer_neck_type="dense",
-                transformer_num_points=args.transformer_neck_num_points,
-            ),
-        },
-        {
-            "name": "yolov11n_transformer_neck_deformable_full_train",
-            "kind": "yolo",
-            "output_dir": root / "yolov11n_transformer_neck_deformable_full_train",
-            "build": lambda output_dir, device: YOLOv11TransformerNeck(
-                output_dir=str(output_dir),
-                num_classes=args.num_classes,
-                reg_max=args.reg_max,
-                device=device,
-                input_canals=input_channels,
-                width_mult=args.width_mult,
-                transformer_d_model=args.transformer_neck_d_model,
-                transformer_num_heads=args.transformer_neck_num_heads,
-                transformer_num_layers=args.transformer_neck_num_layers,
-                transformer_ffn_ratio=args.transformer_neck_ffn_ratio,
-                transformer_dropout=args.transformer_neck_dropout,
-                transformer_residual_scale=args.transformer_neck_residual_scale,
-                transformer_neck_type="deformable",
                 transformer_num_points=args.transformer_neck_num_points,
             ),
         },
@@ -859,18 +859,18 @@ def main():
     print(f"  rtdetr_num_decoder_layers = {args.num_decoder_layers}")
     print("  experiments:")
     print(f"    - YOLOv11 best -> RTDETR one2one deformable head on {args.one2one_device}")
+    print(f"    - transformer neck deformable full training on {args.transformer_neck_device}")
     print(f"    - RTDETR with YOLOv11 backbone and RTDETR hybrid neck on {args.rtdetr_device}")
     print(f"    - transformer neck dense full training on {args.transformer_neck_device}")
-    print(f"    - transformer neck deformable full training on {args.transformer_neck_device}")
 
     if args.dry_run:
         return
 
     Path(args.output_root).mkdir(parents=True, exist_ok=True)
     run_one2one_rtdetr_head(args, input_channels)
+    run_transformer_neck_deformable(args, input_channels)
     run_full_rtdetr(args, input_channels)
     run_transformer_neck(args, input_channels)
-    run_transformer_neck_deformable(args, input_channels)
     if not args.skip_comparison:
         run_final_comparison(args, input_channels)
 
