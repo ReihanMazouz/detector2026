@@ -60,12 +60,13 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--one2one-epochs", type=int, default=300)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--one2one-batch-size", type=int, default=32)
+    parser.add_argument("--one2one-batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--one2one-lr", type=float, default=1e-4)
     parser.add_argument("--patience", type=int, default=100)
     parser.add_argument("--one2one-patience", type=int, default=100)
-    parser.add_argument("--num-workers", type=int, default=None)
+    parser.add_argument("--num-workers", type=int, default=8)
+    parser.add_argument("--prefetch-factor", type=int, default=4)
     parser.add_argument("--full-eval-every", type=int, default=5)
     parser.add_argument("--save-last-every", type=int, default=5)
 
@@ -80,6 +81,7 @@ def parse_args():
     parser.add_argument("--num-decoder-points", type=int, default=4)
     parser.add_argument("--dim-feedforward", type=int, default=1024)
     parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument("--matcher-num-threads", type=int, default=8)
 
     parser.add_argument("--transformer-neck-d-model", type=int, default=128)
     parser.add_argument("--transformer-neck-num-heads", type=int, default=4)
@@ -154,6 +156,7 @@ def build_rtdetr_head_ablation(args, output_dir: Path, *, device: str, input_cha
         use_deformable_attention=deformable,
         dim_feedforward=args.dim_feedforward,
         dropout=args.dropout,
+        matcher_num_threads=args.matcher_num_threads,
     )
 
 
@@ -192,6 +195,7 @@ def run_one2one_rtdetr_head(args, input_channels: int):
             preprocessing=args.preprocessing,
             select_res={"res_hw": args.res_hw, "res_key": args.res_key},
             num_workers=args.num_workers,
+            prefetch_factor=args.prefetch_factor,
             save_last_every=args.save_last_every,
             full_eval_every=args.full_eval_every,
             monitor="val_loss",
@@ -223,6 +227,7 @@ def run_full_rtdetr(args, input_channels: int):
         use_deformable_attention=True,
         dim_feedforward=args.dim_feedforward,
         dropout=args.dropout,
+        matcher_num_threads=args.matcher_num_threads,
     )
     try:
         model.fit(
@@ -235,6 +240,7 @@ def run_full_rtdetr(args, input_channels: int):
             preprocessing=args.preprocessing,
             select_res={"res_hw": args.res_hw, "res_key": args.res_key},
             num_workers=args.num_workers,
+            prefetch_factor=args.prefetch_factor,
             save_last_every=args.save_last_every,
             full_eval_every=args.full_eval_every,
             monitor="val_loss",
@@ -354,6 +360,7 @@ def experiment_specs(args, input_channels: int):
                 use_deformable_attention=True,
                 dim_feedforward=args.dim_feedforward,
                 dropout=args.dropout,
+                matcher_num_threads=args.matcher_num_threads,
             ),
         },
         {
@@ -854,6 +861,10 @@ def main():
     print(f"  early_stopping_monitor = val_loss")
     print(f"  patience = {args.patience}")
     print(f"  one2one_patience = {args.one2one_patience}")
+    print(f"  one2one_batch_size = {args.one2one_batch_size}")
+    print(f"  num_workers = {args.num_workers}")
+    print(f"  prefetch_factor = {args.prefetch_factor}")
+    print(f"  matcher_num_threads = {args.matcher_num_threads}")
     print(f"  rtdetr_hidden_dim = {args.hidden_dim}")
     print(f"  rtdetr_num_queries = {args.num_queries}")
     print(f"  rtdetr_num_decoder_layers = {args.num_decoder_layers}")

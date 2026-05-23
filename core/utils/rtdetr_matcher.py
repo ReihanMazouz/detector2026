@@ -12,6 +12,7 @@ class HungarianMatcher(_BaseHungarianMatcher):
         use_focal_loss: bool = False,
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
+        num_threads: int = 1,
     ):
         super().__init__(
             cost_class=cost_class,
@@ -20,4 +21,5 @@ class HungarianMatcher(_BaseHungarianMatcher):
             use_focal_loss=use_focal_loss,
             focal_alpha=focal_alpha,
             focal_gamma=focal_gamma,
+            num_threads=num_threads,
         )

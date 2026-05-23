@@ -35,6 +35,7 @@ class YOLOv11RTDETR(YOLOv11RTDETRHead):
         dim_feedforward=1024,
         dropout=0.0,
         learnt_init_query=False,
+        matcher_num_threads=1,
     ):
         super().__init__(
             output_dir=output_dir,
@@ -57,6 +58,7 @@ class YOLOv11RTDETR(YOLOv11RTDETRHead):
             dim_feedforward=dim_feedforward,
             dropout=dropout,
             learnt_init_query=learnt_init_query,
+            matcher_num_threads=matcher_num_threads,
         )
 
         c3 = int(256 * width_mult)

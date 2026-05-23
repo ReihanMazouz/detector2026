@@ -34,6 +34,7 @@ class YOLOv11RTDETRHead(YOLOv11):
         dim_feedforward=1024,
         dropout=0.0,
         learnt_init_query=False,
+        matcher_num_threads=1,
     ):
         super().__init__(
             output_dir=output_dir,
@@ -74,7 +75,10 @@ class YOLOv11RTDETRHead(YOLOv11):
             reg_max=self.reg_max,
             device=self.device,
         )
-        self.criterion_one2one = RTDETRLoss(num_classes=self.num_classes)
+        self.criterion_one2one = RTDETRLoss(
+            num_classes=self.num_classes,
+            matcher_num_threads=matcher_num_threads,
+        )
         self.criterion = self.criterion_one2many
         self.active_head = "one2many"
         self._last_image_hw = self.input_hw
@@ -198,6 +202,7 @@ class YOLOv11RTDETRHead(YOLOv11):
         select_res=None,
         num_workers=None,
         persistent_workers=True,
+        prefetch_factor=4,
         monitor="val_loss",
         save_last_every=1,
         full_eval_every=5,
@@ -251,6 +256,8 @@ class YOLOv11RTDETRHead(YOLOv11):
             "num_workers": resolved_num_workers,
             "persistent_workers": bool(persistent_workers) and resolved_num_workers > 0,
         }
+        if resolved_num_workers > 0:
+            loader_kwargs["prefetch_factor"] = max(2, int(prefetch_factor))
         train_loader = DataLoader(train_dataset, shuffle=True, **loader_kwargs)
         val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
 

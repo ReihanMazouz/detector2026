@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
 import torch
 from scipy.optimize import linear_sum_assignment
 
@@ -30,6 +33,7 @@ class HungarianMatcher:
         use_focal_loss: bool = False,
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
+        num_threads: int = 1,
     ):
         self.cost_class = float(cost_class)
         self.cost_bbox = float(cost_bbox)
@@ -37,6 +41,7 @@ class HungarianMatcher:
         self.use_focal_loss = bool(use_focal_loss)
         self.focal_alpha = float(focal_alpha)
         self.focal_gamma = float(focal_gamma)
+        self.num_threads = max(1, int(num_threads))
         if self.cost_class == 0.0 and self.cost_bbox == 0.0 and self.cost_giou == 0.0:
             raise ValueError("At least one matching cost must be non-zero.")
 
@@ -45,14 +50,17 @@ class HungarianMatcher:
         logits = torch.nan_to_num(outputs["pred_logits"], nan=0.0, posinf=50.0, neginf=-50.0)
         boxes = _sanitize_xywh(outputs["pred_boxes"])
 
-        indices = []
+        cost_matrices: list[np.ndarray | None] = []
+        empty_indices: list[tuple[torch.Tensor, torch.Tensor] | None] = []
         for batch_index in range(logits.shape[0]):
             tgt_labels = targets[batch_index]["labels"]
             tgt_boxes = _sanitize_xywh(targets[batch_index]["boxes"])
             if tgt_boxes.numel() == 0:
                 empty = torch.empty(0, dtype=torch.int64, device=logits.device)
-                indices.append((empty, empty))
+                cost_matrices.append(None)
+                empty_indices.append((empty, empty))
                 continue
+            empty_indices.append(None)
 
             if self.use_focal_loss:
                 pred_scores = logits[batch_index].sigmoid().clamp(1e-8, 1.0 - 1e-8)
@@ -70,7 +78,25 @@ class HungarianMatcher:
             )
             cost = self.cost_class * cost_class + self.cost_bbox * cost_bbox + self.cost_giou * cost_giou
             cost = torch.nan_to_num(cost, nan=1e6, posinf=1e6, neginf=-1e6)
-            row_ind, col_ind = linear_sum_assignment(cost.detach().cpu().numpy())
+            cost_matrices.append(cost.detach().cpu().numpy())
+
+        def solve(cost_matrix: np.ndarray | None):
+            if cost_matrix is None:
+                return None
+            return linear_sum_assignment(cost_matrix)
+
+        if self.num_threads > 1 and len(cost_matrices) > 1:
+            with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+                solved = list(executor.map(solve, cost_matrices))
+        else:
+            solved = [solve(cost_matrix) for cost_matrix in cost_matrices]
+
+        indices = []
+        for empty, result in zip(empty_indices, solved):
+            if empty is not None:
+                indices.append(empty)
+                continue
+            row_ind, col_ind = result
             indices.append(
                 (
                     torch.as_tensor(row_ind, dtype=torch.int64, device=logits.device),

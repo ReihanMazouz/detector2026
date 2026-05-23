@@ -17,10 +17,15 @@ class RTDETRLoss(DETRLoss):
         vfl_alpha: float = 0.75,
         vfl_gamma: float = 2.0,
         aux_loss: bool = True,
+        matcher_num_threads: int = 1,
     ):
         super().__init__(
             num_classes=num_classes,
-            matcher=matcher or HungarianMatcher(use_focal_loss=str(cls_loss_type).lower() == "varifocal"),
+            matcher=matcher
+            or HungarianMatcher(
+                use_focal_loss=str(cls_loss_type).lower() == "varifocal",
+                num_threads=matcher_num_threads,
+            ),
             eos_coef=eos_coef,
             lambda_cls=lambda_cls,
             lambda_bbox=lambda_bbox,
