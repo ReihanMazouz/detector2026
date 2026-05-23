@@ -7,7 +7,7 @@ from ..base import BaseModel
 from ...utils.loss import YOLODetectionLoss, YOLOOne2OneHungarianLoss
 from ...utils.tal import make_anchors, dist2bbox
 from ..Head.detect import Detect, One2OneDetect
-from ..Neck import TransformerPyramidNeck
+from ..Neck import DeformablePyramidNeck, TransformerPyramidNeck
 from ..anisotropic_utils import build_anisotropic_standard_plan
 
 
@@ -31,6 +31,8 @@ class YOLOv11TransformerNeck(BaseModel):
         transformer_ffn_ratio=2.0,
         transformer_dropout=0.0,
         transformer_residual_scale=0.0,
+        transformer_neck_type="dense",
+        transformer_num_points=4,
     ):
         super().__init__(device=device, output_dir=output_dir)
         self.num_classes = num_classes
@@ -75,15 +77,31 @@ class YOLOv11TransformerNeck(BaseModel):
         self.attn = C2PSA(c1=c5, c2=c5, n=2, e=0.5)
 
         # ---------------- Transformer Neck ----------------
-        self.neck = TransformerPyramidNeck(
-            in_channels=[c3, c4, c5],
-            d_model=transformer_d_model,
-            num_heads=transformer_num_heads,
-            num_layers=transformer_num_layers,
-            ffn_ratio=transformer_ffn_ratio,
-            dropout=transformer_dropout,
-            residual_scale=transformer_residual_scale,
-        )
+        transformer_neck_type = str(transformer_neck_type).lower()
+        if transformer_neck_type == "dense":
+            self.neck = TransformerPyramidNeck(
+                in_channels=[c3, c4, c5],
+                d_model=transformer_d_model,
+                num_heads=transformer_num_heads,
+                num_layers=transformer_num_layers,
+                ffn_ratio=transformer_ffn_ratio,
+                dropout=transformer_dropout,
+                residual_scale=transformer_residual_scale,
+            )
+        elif transformer_neck_type == "deformable":
+            self.neck = DeformablePyramidNeck(
+                in_channels=[c3, c4, c5],
+                d_model=transformer_d_model,
+                num_heads=transformer_num_heads,
+                num_layers=transformer_num_layers,
+                num_points=transformer_num_points,
+                ffn_ratio=transformer_ffn_ratio,
+                dropout=transformer_dropout,
+                residual_scale=transformer_residual_scale,
+            )
+        else:
+            raise ValueError("transformer_neck_type must be 'dense' or 'deformable'.")
+        self.transformer_neck_type = transformer_neck_type
 
         # ---------------- Detect ----------------
         self.detect = Detect(
@@ -156,9 +174,9 @@ class YOLOv11TransformerNeck(BaseModel):
         self.debug_shape("attn (f5)", f5)
 
         p3_out, p4_out2, p5_out = self.neck(f3, f4, f5)
-        self.debug_shape("transformer_neck p3_out", p3_out)
-        self.debug_shape("transformer_neck p4_out2", p4_out2)
-        self.debug_shape("transformer_neck p5_out", p5_out)
+        self.debug_shape(f"{self.transformer_neck_type}_transformer_neck p3_out", p3_out)
+        self.debug_shape(f"{self.transformer_neck_type}_transformer_neck p4_out2", p4_out2)
+        self.debug_shape(f"{self.transformer_neck_type}_transformer_neck p5_out", p5_out)
 
         return p3_out, p4_out2, p5_out
 

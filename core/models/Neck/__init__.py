@@ -1,4 +1,4 @@
 from .rtdetr_hybrid import RTDETRHybridEncoderNeck
-from .transformer import TransformerPyramidNeck
+from .transformer import DeformablePyramidNeck, TransformerPyramidNeck
 
-__all__ = ["RTDETRHybridEncoderNeck", "TransformerPyramidNeck"]
+__all__ = ["DeformablePyramidNeck", "RTDETRHybridEncoderNeck", "TransformerPyramidNeck"]

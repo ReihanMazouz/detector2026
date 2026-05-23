@@ -27,9 +27,9 @@ from detector2026.core.utils.preprocess import preprocessing_num_channels
 
 
 DEFAULT_DATA_DIR = "/data/RAWSIM/RMA/rf_dataset_for_real_validation"
-DEFAULT_OUTPUT_ROOT = "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_for_real_validation/yolov11n_ablation_complete"
+DEFAULT_OUTPUT_ROOT = "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/yolov11n_ablation_complete"
 DEFAULT_YOLOV11_BEST = (
-    "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_for_real_validation/"
+    "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/"
     "yolov11n_specificres_cfg512/best.pt"
 )
 
@@ -73,8 +73,8 @@ def parse_args():
     parser.add_argument("--rtdetr-device", default="cuda:0")
     parser.add_argument("--transformer-neck-device", default="cuda:0")
 
-    parser.add_argument("--hidden-dim", type=int, default=256)
-    parser.add_argument("--num-queries", type=int, default=300)
+    parser.add_argument("--hidden-dim", type=int, default=128)
+    parser.add_argument("--num-queries", type=int, default=100)
     parser.add_argument("--num-decoder-layers", type=int, default=6)
     parser.add_argument("--num-heads", type=int, default=8)
     parser.add_argument("--num-decoder-points", type=int, default=4)
@@ -84,6 +84,7 @@ def parse_args():
     parser.add_argument("--transformer-neck-d-model", type=int, default=128)
     parser.add_argument("--transformer-neck-num-heads", type=int, default=4)
     parser.add_argument("--transformer-neck-num-layers", type=int, default=1)
+    parser.add_argument("--transformer-neck-num-points", type=int, default=4)
     parser.add_argument("--transformer-neck-ffn-ratio", type=float, default=2.0)
     parser.add_argument("--transformer-neck-dropout", type=float, default=0.0)
     parser.add_argument("--transformer-neck-residual-scale", type=float, default=0.0)
@@ -91,6 +92,7 @@ def parse_args():
     parser.add_argument("--skip-one2one-deformable", action="store_true")
     parser.add_argument("--skip-rtdetr-full", action="store_true")
     parser.add_argument("--skip-transformer-neck", action="store_true")
+    parser.add_argument("--skip-transformer-neck-deformable", action="store_true")
     parser.add_argument("--skip-comparison", action="store_true")
     parser.add_argument("--num-visual-examples", type=int, default=10)
     parser.add_argument("--visual-score-threshold", type=float, default=0.05)
@@ -262,6 +264,37 @@ def run_transformer_neck(args, input_channels: int):
         transformer_ffn_ratio=args.transformer_neck_ffn_ratio,
         transformer_dropout=args.transformer_neck_dropout,
         transformer_residual_scale=args.transformer_neck_residual_scale,
+        transformer_neck_type="dense",
+        transformer_num_points=args.transformer_neck_num_points,
+    )
+    try:
+        fit_yolo_model(model, args, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, patience=args.patience)
+    finally:
+        del model
+        cleanup()
+
+
+def run_transformer_neck_deformable(args, input_channels: int):
+    name = "yolov11n_transformer_neck_deformable_full_train"
+    output_dir = Path(args.output_root) / name
+    if args.skip_transformer_neck_deformable or should_skip(name, output_dir, args.overwrite):
+        return
+    print(f"\n[RUN] {name} on {args.transformer_neck_device}")
+    model = YOLOv11TransformerNeck(
+        output_dir=str(output_dir),
+        num_classes=args.num_classes,
+        reg_max=args.reg_max,
+        device=args.transformer_neck_device,
+        input_canals=input_channels,
+        width_mult=args.width_mult,
+        transformer_d_model=args.transformer_neck_d_model,
+        transformer_num_heads=args.transformer_neck_num_heads,
+        transformer_num_layers=args.transformer_neck_num_layers,
+        transformer_ffn_ratio=args.transformer_neck_ffn_ratio,
+        transformer_dropout=args.transformer_neck_dropout,
+        transformer_residual_scale=args.transformer_neck_residual_scale,
+        transformer_neck_type="deformable",
+        transformer_num_points=args.transformer_neck_num_points,
     )
     try:
         fit_yolo_model(model, args, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, patience=args.patience)
@@ -319,6 +352,29 @@ def experiment_specs(args, input_channels: int):
                 transformer_ffn_ratio=args.transformer_neck_ffn_ratio,
                 transformer_dropout=args.transformer_neck_dropout,
                 transformer_residual_scale=args.transformer_neck_residual_scale,
+                transformer_neck_type="dense",
+                transformer_num_points=args.transformer_neck_num_points,
+            ),
+        },
+        {
+            "name": "yolov11n_transformer_neck_deformable_full_train",
+            "kind": "yolo",
+            "output_dir": root / "yolov11n_transformer_neck_deformable_full_train",
+            "build": lambda output_dir, device: YOLOv11TransformerNeck(
+                output_dir=str(output_dir),
+                num_classes=args.num_classes,
+                reg_max=args.reg_max,
+                device=device,
+                input_canals=input_channels,
+                width_mult=args.width_mult,
+                transformer_d_model=args.transformer_neck_d_model,
+                transformer_num_heads=args.transformer_neck_num_heads,
+                transformer_num_layers=args.transformer_neck_num_layers,
+                transformer_ffn_ratio=args.transformer_neck_ffn_ratio,
+                transformer_dropout=args.transformer_neck_dropout,
+                transformer_residual_scale=args.transformer_neck_residual_scale,
+                transformer_neck_type="deformable",
+                transformer_num_points=args.transformer_neck_num_points,
             ),
         },
     ]
@@ -798,10 +854,14 @@ def main():
     print(f"  early_stopping_monitor = val_loss")
     print(f"  patience = {args.patience}")
     print(f"  one2one_patience = {args.one2one_patience}")
+    print(f"  rtdetr_hidden_dim = {args.hidden_dim}")
+    print(f"  rtdetr_num_queries = {args.num_queries}")
+    print(f"  rtdetr_num_decoder_layers = {args.num_decoder_layers}")
     print("  experiments:")
     print(f"    - YOLOv11 best -> RTDETR one2one deformable head on {args.one2one_device}")
     print(f"    - RTDETR with YOLOv11 backbone and RTDETR hybrid neck on {args.rtdetr_device}")
-    print(f"    - transformer neck full training on {args.transformer_neck_device}")
+    print(f"    - transformer neck dense full training on {args.transformer_neck_device}")
+    print(f"    - transformer neck deformable full training on {args.transformer_neck_device}")
 
     if args.dry_run:
         return
@@ -810,6 +870,7 @@ def main():
     run_one2one_rtdetr_head(args, input_channels)
     run_full_rtdetr(args, input_channels)
     run_transformer_neck(args, input_channels)
+    run_transformer_neck_deformable(args, input_channels)
     if not args.skip_comparison:
         run_final_comparison(args, input_channels)
 
