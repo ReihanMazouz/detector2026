@@ -116,9 +116,13 @@ from detector2026.core.models.tf_attn_yolo import TF_Attn_Yolo
 from detector2026.core.models.yolov11 import YOLOv11
 from detector2026.core.models.Head.rtdetr import MSDeformAttn, RTDETRDecoderLayer
 from detector2026.core.models.Neck.transformer import TransformerPyramidNeck
+from detector2026.core.models.yolov11_ablation.yolov11_no_neck import YOLOv11NoNeck
+from detector2026.core.models.yolov11_ablation.yolov11_p3_rtdetr import YOLOv11P3Direct, YOLOv11P3RTDETR
 from detector2026.core.models.yolov11_ablation.yolov11_rtdetr import YOLOv11RTDETR
 from detector2026.core.models.yolov11_ablation.yolov11_rtdetr_head import YOLOv11RTDETRHead
+from detector2026.core.models.yolov11_ablation.yolov11_swin_backbone import YOLOv11SwinBackbone
 from detector2026.core.models.yolov11_ablation.yolov11_transformer_neck import YOLOv11TransformerNeck
+from detector2026.core.models.Backbones.SwinBackbone import WindowAttention
 from detector2026.core.nn.blocks import Attention, DFL, PCSA, SCSA
 
 
@@ -132,6 +136,7 @@ DEFAULT_RTDETR_NUM_QUERIES = 100
 DEFAULT_RTDETR_DECODER_LAYERS = 6
 DEFAULT_RTDETR_NUM_HEADS = 8
 DEFAULT_RTDETR_DECODER_POINTS = 4
+DEFAULT_P3_RTDETR_DECODER_POINTS = 16
 DEFAULT_RTDETR_FFN_DIM = 1024
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "tmp"
 
@@ -203,6 +208,17 @@ def _extra_mha_macs(module: nn.MultiheadAttention, query: torch.Tensor, key: tor
     return int(qkv_proj + out_proj + qk + av + softmax_and_scale)
 
 
+def _extra_window_attention_macs(module: WindowAttention, x: torch.Tensor) -> int:
+    if x.dim() != 3:
+        return 0
+    num_windows, num_tokens, embed_dim = x.shape
+    head_dim = embed_dim // module.num_heads
+    qk = num_windows * module.num_heads * num_tokens * num_tokens * head_dim
+    av = num_windows * module.num_heads * num_tokens * num_tokens * head_dim
+    softmax_and_scale = 4 * num_windows * module.num_heads * num_tokens * num_tokens
+    return int(qk + av + softmax_and_scale)
+
+
 def _extra_rtdetr_decoder_layer_macs(module: RTDETRDecoderLayer, target: torch.Tensor) -> int:
     return _extra_mha_macs(module.self_attn, target.transpose(0, 1), target.transpose(0, 1))
 
@@ -255,9 +271,11 @@ def _missing_macs(model: nn.Module, inputs: Tuple[Any, ...]) -> int:
             extra_macs += _extra_ms_deform_attn_macs(module, x)
         elif isinstance(module, TransformerPyramidNeck):
             extra_macs += _extra_transformer_neck_encoder_macs(module, module_inputs)
+        elif isinstance(module, WindowAttention):
+            extra_macs += _extra_window_attention_macs(module, x)
 
     for module in model.modules():
-        if isinstance(module, (Attention, PCSA, RTDETRDecoderLayer, MSDeformAttn, TransformerPyramidNeck)):
+        if isinstance(module, (Attention, PCSA, RTDETRDecoderLayer, MSDeformAttn, TransformerPyramidNeck, WindowAttention)):
             hooks.append(module.register_forward_hook(hook_fn))
 
     try:
@@ -310,6 +328,77 @@ def _build_yolov11_model(device: str) -> YOLOv11:
         input_canals=1,
         width_mult=DEFAULT_WIDTH_MULT,
         input_hw=DEFAULT_TF_HW,
+    )
+    model.eval()
+    return model
+
+
+def _build_yolov11_no_neck_model(device: str) -> YOLOv11NoNeck:
+    model = YOLOv11NoNeck(
+        output_dir="/tmp/yolov11_no_neck_profile",
+        num_classes=DEFAULT_NUM_CLASSES,
+        reg_max=DEFAULT_REG_MAX,
+        device=device,
+        input_canals=1,
+        width_mult=DEFAULT_WIDTH_MULT,
+        input_hw=DEFAULT_TF_HW,
+    )
+    model.eval()
+    return model
+
+
+def _build_yolov11_p3_direct_model(device: str) -> YOLOv11P3Direct:
+    model = YOLOv11P3Direct(
+        output_dir="/tmp/yolov11_p3_direct_profile",
+        num_classes=DEFAULT_NUM_CLASSES,
+        reg_max=DEFAULT_REG_MAX,
+        device=device,
+        input_canals=1,
+        width_mult=DEFAULT_WIDTH_MULT,
+        input_hw=DEFAULT_TF_HW,
+        tal_topk=10,
+    )
+    model.eval()
+    return model
+
+
+def _build_yolov11_p3_rtdetr_model(device: str) -> YOLOv11P3RTDETR:
+    model = YOLOv11P3RTDETR(
+        output_dir="/tmp/yolov11_p3_rtdetr_profile",
+        num_classes=DEFAULT_NUM_CLASSES,
+        reg_max=DEFAULT_REG_MAX,
+        device=device,
+        input_canals=1,
+        width_mult=DEFAULT_WIDTH_MULT,
+        input_hw=DEFAULT_TF_HW,
+        hidden_dim=DEFAULT_RTDETR_HIDDEN_DIM,
+        num_queries=DEFAULT_RTDETR_NUM_QUERIES,
+        num_decoder_layers=DEFAULT_RTDETR_DECODER_LAYERS,
+        num_heads=DEFAULT_RTDETR_NUM_HEADS,
+        num_decoder_points=DEFAULT_P3_RTDETR_DECODER_POINTS,
+        dim_feedforward=DEFAULT_RTDETR_FFN_DIM,
+    )
+    model.eval()
+    return model
+
+
+def _build_yolov11_swin_backbone_model(device: str) -> YOLOv11SwinBackbone:
+    model = YOLOv11SwinBackbone(
+        output_dir="/tmp/yolov11_swin_backbone_profile",
+        num_classes=DEFAULT_NUM_CLASSES,
+        reg_max=DEFAULT_REG_MAX,
+        device=device,
+        input_canals=1,
+        width_mult=DEFAULT_WIDTH_MULT,
+        input_hw=DEFAULT_TF_HW,
+        swin_embed_dim=None,
+        swin_depths=(2, 2, 4, 2),
+        swin_num_heads=(2, 4, 8, 8),
+        swin_window_size=8,
+        swin_mlp_ratio=4.0,
+        swin_drop_rate=0.0,
+        swin_attn_drop_rate=0.0,
+        swin_drop_path_rate=0.05,
     )
     model.eval()
     return model
@@ -494,6 +583,10 @@ def parse_args() -> argparse.Namespace:
             "mr",
             "tf",
             "yolov11",
+            "yolov11-no-neck",
+            "yolov11-p3-direct",
+            "yolov11-p3-rtdetr",
+            "yolov11-swin-backbone",
             "yolov11-rtdetr-head",
             "yolov11-rtdetr-full",
             "yolov11-transformer-neck",
@@ -525,6 +618,10 @@ def main() -> int:
         yolov11_model = _build_yolov11_model(args.device)
         rows.append(_summarize("YOLOv11", yolov11_model, single_image_inputs))
 
+    if args.model in {"yolov11-no-neck", "yolov11-ablation", "all"}:
+        yolov11_no_neck_model = _build_yolov11_no_neck_model(args.device)
+        rows.append(_summarize("YOLOv11_No_Neck", yolov11_no_neck_model, single_image_inputs))
+
     if args.model in {"yolov11-rtdetr-head", "yolov11-ablation", "all"}:
         rtdetr_head_model = _build_yolov11_rtdetr_head_model(args.device)
         rows.append(_summarize("YOLOv11_RTDETR_Head", rtdetr_head_model, single_image_inputs))
@@ -532,6 +629,18 @@ def main() -> int:
     if args.model in {"yolov11-rtdetr-full", "yolov11-ablation", "all"}:
         rtdetr_full_model = _build_yolov11_rtdetr_full_model(args.device)
         rows.append(_summarize("YOLOv11_RTDETR_Full", rtdetr_full_model, single_image_inputs))
+
+    if args.model in {"yolov11-p3-direct", "yolov11-ablation", "all"}:
+        p3_direct_model = _build_yolov11_p3_direct_model(args.device)
+        rows.append(_summarize("YOLOv11_P3_Direct", p3_direct_model, single_image_inputs))
+
+    if args.model in {"yolov11-p3-rtdetr", "yolov11-ablation", "all"}:
+        p3_rtdetr_model = _build_yolov11_p3_rtdetr_model(args.device)
+        rows.append(_summarize("YOLOv11_P3_RTDETR", p3_rtdetr_model, single_image_inputs))
+
+    if args.model in {"yolov11-swin-backbone", "yolov11-ablation", "all"}:
+        swin_backbone_model = _build_yolov11_swin_backbone_model(args.device)
+        rows.append(_summarize("YOLOv11_Swin_Backbone", swin_backbone_model, single_image_inputs))
 
     if args.model in {"yolov11-transformer-neck", "yolov11-ablation", "all"}:
         transformer_neck_model = _build_yolov11_transformer_neck_model(args.device)

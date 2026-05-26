@@ -1,7 +1,6 @@
 # Ablations YOLOv11 RT-DETR
 
-Ce dossier regroupe les ablations YOLOv11 qui remplacent ou complètent la tête YOLO standard.
-La variante principale proche de DEYO est `YOLOv11RTDETRHead` : elle conserve le backbone et le neck YOLOv11, les gèle après chargement d'un checkpoint YOLOv11, puis entraîne une tête RT-DETR one-to-one sur les cartes P3/P4/P5.
+Ce dossier regroupe les ablations YOLOv11 avec des modules transformers. 
 
 ## 1. YOLOv11RTDETRHead
 
@@ -16,8 +15,6 @@ Lors du fine-tuning one-to-one, `train_one2one_head_only()` gèle le backbone, l
 detect.cv_dist -> detect_one2one.cv_dist
 detect.dfl     -> detect_one2one.dfl
 ```
-
-C'est le seul transfert direct de YOLO vers RT-DETR. La classification et le decoder transformer sont appris par la tête RT-DETR.
 
 ### 1.1. Sélection Des Queries
 
@@ -126,20 +123,7 @@ Chaque terme \(\mathcal{L}\) contient :
 
 Cette supervision auxiliaire stabilise l'entraînement du transformer, mais elle augmente la valeur numérique de la loss car plusieurs termes sont additionnés.
 
-### 1.5. Attention Sur Train Loss Et Val Loss
-
-Dans le decoder proche DEYO, le mode entraînement retourne toutes les couches decoder, tandis que le mode évaluation retourne uniquement la couche d'inférence configurée, généralement la dernière.
-
-Si la validation est calculée en mode `eval`, on obtient donc :
-
-```text
-train loss = loss finale decoder + loss encodeur + losses decoder intermédiaires
-val loss   = loss finale decoder + loss encodeur
-```
-
-Les deux valeurs ne sont donc pas directement comparables. Une loss d'entraînement plus haute que la loss de validation peut être attendue et ne signifie pas nécessairement un surapprentissage ou une fuite de données.
-
-### 1.6. Post-Process D'Inférence
+### 1.5. Post-Process D'Inférence
 
 Pour la tête RT-DETR one-to-one :
 
@@ -257,7 +241,182 @@ b_l = \sigma\left(\Delta b_l + \sigma^{-1}(b_{l-1})\right)
 
 avec \(b_l\) la boîte normalisée prédite à la couche decoder \(l\), et \(\Delta b_l\) la correction prédite par la tête bbox de cette couche. La loss reste une loss one-to-one avec matching Hungarian, classification varifocal, L1 et GIoU.
 
-## 3. YOLOv11TransformerNeck
+## 3. YOLOv11P3Direct Et YOLOv11P3RTDETR
+
+Cette ablation isole l'effet d'une tête RT-DETR lorsque le modèle ne dispose que d'un seul niveau de features. Elle compare trois entraînements construits sur le même backbone YOLOv11n simplifié, arrêté au niveau \(P_3\).
+
+Le script associé est :
+
+```text
+core/scripts/run_yolov11_p3_rtdetr_ablation.py
+```
+
+Les sorties sont :
+
+```text
+exp1_yolov11n_p3_direct_tal_topk10
+exp2_1_yolov11n_p3_rtdetr_frozen_backbone
+exp2_2_yolov11n_p3_rtdetr_full_train
+```
+
+### 3.1. Expérience 1 : YOLOv11P3Direct
+
+`YOLOv11P3Direct` conserve uniquement le début du backbone YOLOv11 jusqu'à \(P_3\), puis applique directement une tête YOLO `Detect` mono-échelle. Le neck FPN/PAN, \(P_4\), \(P_5\), `SPPF` et `C2PSA` sont supprimés.
+
+Le chemin est :
+
+```text
+image -> conv1 -> conv2 -> C3k2 -> conv3 -> C3k2 -> P3 -> Detect
+```
+
+Pour une entrée \(256 \times 256\), le niveau \(P_3\) a typiquement :
+
+\[
+P_3 \in \mathbb{R}^{B \times 64 \times 32 \times 32}
+\]
+
+avec la configuration `width_mult=0.25`. La tête YOLO produit :
+
+\[
+\hat{D}_3 \in \mathbb{R}^{B \times 4r \times 32 \times 32},
+\quad
+\hat{S}_3 \in \mathbb{R}^{B \times K \times 32 \times 32}
+\]
+
+où :
+
+- \(r=\texttt{reg\_max}\) est le nombre de bins DFL par côté de boîte ;
+- \(K\) est le nombre de classes ;
+- \(\hat{D}_3\) contient les distributions de distances DFL ;
+- \(\hat{S}_3\) contient les logits de classification.
+
+La loss est la loss YOLO classique avec `TaskAlignedAssigner` :
+
+\[
+\mathcal{L}_{YOLO}
+=
+\lambda_{box}\mathcal{L}_{box}
++ \lambda_{cls}\mathcal{L}_{BCE}
++ \lambda_{dfl}\mathcal{L}_{DFL}
+\]
+
+L'assignation utilise explicitement :
+
+```text
+tal_topk = 10
+```
+
+Cette expérience sert de référence : elle apprend un détecteur P3 simple, puis son `best.pt` initialise les deux variantes RT-DETR suivantes.
+
+### 3.2. Expérience 2.1 : P3 RT-DETR Avec Backbone Figé
+
+`YOLOv11P3RTDETR` reprend le même backbone P3 que l'expérience 1, charge :
+
+```text
+exp1_yolov11n_p3_direct_tal_topk10/best.pt
+```
+
+puis remplace la tête YOLO entraînable par une tête `RTDETRHead` mono-échelle. Dans l'expérience 2.1, le backbone est figé et seule la tête RT-DETR est entraînée.
+
+Le chemin forward est :
+
+```text
+image -> backbone P3 figé -> P3 -> RTDETRHead
+```
+
+La feature \(P_3\) est projetée vers la dimension cachée \(d\) :
+
+\[
+X_3 = \phi_3(P_3),
+\quad
+X_3 \in \mathbb{R}^{B \times d \times H_3 \times W_3}
+\]
+
+puis aplatie :
+
+\[
+M = \operatorname{Flatten}(X_3),
+\quad
+M \in \mathbb{R}^{B \times N_3 \times d},
+\quad
+N_3 = H_3W_3
+\]
+
+Les `num_queries` meilleurs tokens sont sélectionnés par le score encodeur :
+
+\[
+i_q =
+\operatorname{TopK}_q
+\left(
+\max_{k \in \{1,\dots,K\}} h_{cls}(M)_{:, :, k}
+\right)
+\]
+
+La tête utilise une attention déformable mono-niveau. Comme il n'y a qu'un seul niveau \(P_3\), \(L=1\), et la cross-attention devient :
+
+\[
+\operatorname{MSDeformAttn}(q_i)
+=
+\sum_{k=1}^{K_p}
+a_{i,k}\,
+V_3(p_i + \Delta p_{i,k})
+\]
+
+où :
+
+- \(q_i\) est la query \(i\) ;
+- \(K_p=\texttt{num\_decoder\_points}=16\) est le nombre de points échantillonnés ;
+- \(p_i\) est la boîte ou position de référence de la query ;
+- \(\Delta p_{i,k}\) est l'offset appris du point \(k\) ;
+- \(a_{i,k}\) est le poids d'attention appris ;
+- \(V_3\) est la carte de valeurs issue de \(P_3\).
+
+Cette expérience mesure la capacité d'une tête RT-DETR à exploiter des features P3 déjà apprises, sans modifier l'extracteur.
+
+### 3.3. Expérience 2.2 : P3 RT-DETR En Full Training
+
+L'expérience 2.2 utilise la même initialisation depuis `best.pt`, la même tête `RTDETRHead` et la même attention déformable à 16 points, mais ne fige pas le backbone :
+
+```text
+image -> backbone P3 entraînable -> P3 -> RTDETRHead
+```
+
+La loss reste la loss RT-DETR one-to-one :
+
+\[
+\mathcal{L}_{RTDETR}
+=
+\lambda_{cls}\mathcal{L}_{varifocal}
++ \lambda_{box}\mathcal{L}_{L1}
++ \lambda_{giou}\mathcal{L}_{GIoU}
+\]
+
+avec matching Hungarian entre les `num_queries` prédictions et les objets ground truth. Les sorties auxiliaires du decoder sont aussi supervisées :
+
+\[
+\mathcal{L}_{total}
+=
+\mathcal{L}_{dec,L}
++ \mathcal{L}_{enc}
++ \sum_{l=1}^{L-1}\mathcal{L}_{dec,l}
+\]
+
+Cette variante teste si la tête RT-DETR a besoin d'adapter les features P3 elles-mêmes. La comparaison 2.1/2.2 sépare donc :
+
+- l'effet de la tête RT-DETR seule ;
+- l'effet d'un ré-entraînement complet backbone + tête.
+
+### 3.4. Ablation Simple : YOLOv11NoNeck
+
+`YOLOv11NoNeck` conserve le backbone YOLOv11n jusqu'à \(P_5\), mais supprime le neck FPN/PAN. Les trois cartes backbone sont donc envoyées directement à la tête YOLO `Detect` :
+
+```text
+image -> backbone YOLOv11n -> P3, P4, P5 -> Detect
+```
+
+La loss reste la loss YOLO standard avec `TaskAlignedAssigner`. Cette ablation teste uniquement si le neck multi-échelle YOLO apporte un gain par rapport à des têtes appliquées directement sur les features backbone.
+
+## 4. YOLOv11TransformerNeck
 
 `YOLOv11TransformerNeck` conserve le backbone YOLOv11 jusqu'aux cartes multi-échelles \(P_3, P_4, P_5\), puis remplace le neck FPN/PAN convolutionnel par `TransformerPyramidNeck`. La tête de détection reste une tête YOLO classique `Detect`.
 
@@ -269,7 +428,7 @@ image -> backbone YOLOv11 -> P3, P4, P5 -> TransformerPyramidNeck -> Detect
 
 Contrairement à `YOLOv11RTDETRHead`, cette ablation ne remplace pas la tête par une tête RT-DETR. Elle teste uniquement l'effet d'un neck transformer pour mélanger les informations entre les échelles.
 
-### 3.1. Projection Des Cartes Multi-Échelles
+### 4.1. Projection Des Cartes Multi-Échelles
 
 Soient trois cartes issues du backbone :
 
@@ -291,7 +450,7 @@ Chaque carte est projetée vers une dimension commune \(d\), égale à `transfor
 
 où \(\phi_l\) est une convolution \(1 \times 1\). Cette projection permet de concaténer les tokens de P3, P4 et P5 dans un même espace latent.
 
-### 3.2. Construction Des Tokens
+### 4.2. Construction Des Tokens
 
 Chaque carte projetée est aplatie spatialement :
 
@@ -338,7 +497,7 @@ P5 :  8 x  8 = 64 tokens
 N  = 1344 tokens
 ```
 
-### 3.3. Mélange Global Par Self-Attention
+### 4.3. Mélange Global Par Self-Attention
 
 Le neck applique un `TransformerEncoder` sur la séquence concaténée :
 
@@ -372,7 +531,7 @@ Le coût théorique de cette attention est quadratique en nombre de tokens :
 
 Cette propriété est importante : même si le modèle peut avoir peu de paramètres, le coût réel de l'attention peut être élevé lorsque \(N\) augmente.
 
-### 3.4. Reconstruction Des Cartes
+### 4.4. Reconstruction Des Cartes
 
 Après le transformer, la séquence \(Z\) est découpée selon les tailles originales :
 
@@ -413,7 +572,7 @@ P_l^{out} = P_l
 
 Le modèle commence donc exactement depuis les features YOLOv11, puis apprend progressivement à utiliser la correction transformer si \(\alpha\) devient non nul.
 
-### 3.5. Variante Déformable
+### 4.5. Variante Déformable
 
 La variante `transformer_neck_type="deformable"` remplace le `TransformerEncoder` dense par `DeformablePyramidNeck`. Les tokens P3/P4/P5 sont toujours projetés dans une dimension commune \(d\), mais chaque query n'attend qu'un petit nombre de points par niveau :
 
@@ -435,7 +594,30 @@ où :
 
 Le coût principal passe de \(\mathcal{O}(N^2d)\) pour l'attention dense à \(\mathcal{O}(NLKd)\), avec \(L=3\) niveaux. Cette variante conserve un mélange multi-échelle, mais évite la matrice d'attention dense entre tous les tokens.
 
-## 4. Coûts Des Modèles
+## 5. Backbones Transformers : Swin Et DAT
+
+Ces deux ablations remplacent le backbone convolutionnel YOLOv11 par un backbone transformer hiérarchique, en conservant à l'identique le neck FPN/PAN et la tête `Detect`. Le neck et la tête étant gelés entre les deux variantes, la comparaison Swin/DAT isole directement l'effet du type d'attention dans le backbone.
+
+Le chemin commun est :
+
+```text
+image -> PatchEmbed (4×4, stride 4) -> stages transformer -> P3, P4, P5 -> neck YOLOv11 -> Detect
+```
+
+La configuration partagée est :
+
+```text
+embed_dim = 64    (= 256 × width_mult)
+depths    = (2, 2, 4, 2)
+num_heads = (2, 4, 8, 8)
+mlp_ratio = 4.0
+```
+
+**`YOLOv11SwinBackbone`** utilise le Swin Transformer (Liu et al., 2021) : chaque token n'attend que ses voisins dans une fenêtre locale de taille fixe \(w \times w\), avec décalage cyclique entre couches alternées pour permettre un échange d'information inter-fenêtres. Le coût d'attention est \(\mathcal{O}(w^4 d)\) par fenêtre, indépendant de la résolution. Voir [Liu et al., arXiv:2103.14030](https://arxiv.org/abs/2103.14030).
+
+**`YOLOv11DATBackbone`** utilise le DAT (*Deformable Attention Transformer*, Xia et al., 2022) : les blocs alternent attention locale par fenêtres (pairs) et attention déformable (impairs). Dans les blocs déformables, chaque token peut observer \(r^2\) positions adaptatives apprises sur l'ensemble de la feature map, sans contrainte de localité. Le coût est \(\mathcal{O}(HW \cdot r^2 \cdot d)\) avec \(r=7\). Voir [Xia et al., arXiv:2201.00520](https://arxiv.org/abs/2201.00520).
+
+## 6. Coûts Des Modèles
 
 Les coûts ci-dessous sont calculés avec `core/scripts/report_model_costs.py`. Les MACs corrigées ajoutent les opérations d'attention que `thop` ne compte pas correctement : attention spatiale YOLO, self-attention transformer, attention déformable RT-DETR et encodeur du `TransformerPyramidNeck`.
 
@@ -444,13 +626,18 @@ Les coûts ci-dessous sont calculés avec `core/scripts/report_model_costs.py`. 
 | MR_YOLO | multi-résolution | 2.44M | 2.79G | 5.57G | 17.00M |
 | TF_Attn_Yolo | 1x1x256x256 | 2.37M | 498.38M | 996.75M | 1.64M |
 | YOLOv11 | 1x1x256x256 | 3.64M | 631.28M | 1.26G | 1.64M |
+| YOLOv11_No_Neck | 1x1x256x256 | 2.88M | 509.82M | 1.02G | 1.64M |
 | YOLOv11_RTDETR_Head | 1x1x256x256 | 6.00M | 975.08M | 1.95G | 59.16M |
 | YOLOv11_RTDETR_Full | 1x1x256x256 | 7.28M | 1.26G | 2.52G | 59.16M |
+| YOLOv11_P3_Direct | 1x1x256x256 | 232.85K | 313.20M | 626.39M | 0 |
+| YOLOv11_P3_RTDETR | 1x1x256x256 | 3.07M | 661.22M | 1.32G | 57.83M |
 | YOLOv11_Transformer_Neck | 1x1x256x256 | 3.13M | 1.21G | 2.41G | 669.12M |
 | YOLOv11_Deformable_Neck | 1x1x256x256 | 3.12M | 699.86M | 1.40G | 3.70M |
+| YOLOv11_Swin_Backbone | 1x1x256x256 | 6.10M | 3.28G | 6.56G | 142.61M |
+| YOLOv11_DAT_Backbone | 1x1x256x256 | — | — | — | — |
 
 
-## 5. Sources
+## 7. Sources
 
 - DEYO, implémentation officielle : https://github.com/ouyanghaodong/DEYO  
   Référence utilisée pour l'architecture `RTDETRDecoder`, le transfert depuis un modèle YOLO, le choix `nc` sans classe `no-object`, la varifocal loss, le decoder à raffinement itératif et la configuration d'entraînement.
@@ -466,3 +653,9 @@ Les coûts ci-dessous sont calculés avec `core/scripts/report_model_costs.py`. 
 
 - Zhu et al., *Deformable DETR: Deformable Transformers for End-to-End Object Detection* : https://arxiv.org/abs/2010.04159  
   Référence utilisée pour l'attention déformable multi-échelle, où l'attention se limite à un petit nombre de points échantillonnés autour de références spatiales.
+
+- Liu et al., *Swin Transformer: Hierarchical Vision Transformer using Shifted Windows* : https://arxiv.org/abs/2103.14030  
+  Référence originale du backbone Swin, du patch embedding hiérarchique et de l'attention locale par fenêtres décalées.
+
+- Xia et al., *Vision Transformer with Deformable Attention* / DAT : https://arxiv.org/abs/2201.00520  
+  Référence pour l'attention déformable dans un backbone hiérarchique : génération d'offsets par réseau léger, grille de référence uniforme, bornage tanh, et alternance blocs locaux / déformables pour stabiliser l'entraînement.

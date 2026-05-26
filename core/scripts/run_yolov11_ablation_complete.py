@@ -15,8 +15,10 @@ from torch.utils.data import DataLoader
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from detector2026.core.models.yolov11_ablation import (
+    YOLOv11DATBackbone,
     YOLOv11RTDETR,
     YOLOv11RTDETRHead,
+    YOLOv11SwinBackbone,
     YOLOv11TransformerNeck,
 )
 from detector2026.core.utils.dataset import YOLODatasetSpecificRes
@@ -91,8 +93,32 @@ def parse_args():
     parser.add_argument("--transformer-neck-dropout", type=float, default=0.0)
     parser.add_argument("--transformer-neck-residual-scale", type=float, default=0.0)
 
+    parser.add_argument("--swin-device", default="cuda:0")
+    parser.add_argument("--swin-embed-dim", type=int, default=0, help="0 keeps it tied to width_mult.")
+    parser.add_argument("--swin-depths", type=int, nargs=4, default=(2, 2, 4, 2))
+    parser.add_argument("--swin-num-heads", type=int, nargs=4, default=(2, 4, 8, 8))
+    parser.add_argument("--swin-window-size", type=int, default=8)
+    parser.add_argument("--swin-mlp-ratio", type=float, default=4.0)
+    parser.add_argument("--swin-drop-rate", type=float, default=0.0)
+    parser.add_argument("--swin-attn-drop-rate", type=float, default=0.0)
+    parser.add_argument("--swin-drop-path-rate", type=float, default=0.05)
+
+    parser.add_argument("--dat-device", default="cuda:0")
+    parser.add_argument("--dat-embed-dim", type=int, default=0, help="0 keeps it tied to width_mult.")
+    parser.add_argument("--dat-depths", type=int, nargs=4, default=(2, 2, 4, 2))
+    parser.add_argument("--dat-num-heads", type=int, nargs=4, default=(2, 4, 8, 8))
+    parser.add_argument("--dat-window-size", type=int, default=8)
+    parser.add_argument("--dat-num-points", type=int, default=7, help="r: deformable grid is r×r.")
+    parser.add_argument("--dat-mlp-ratio", type=float, default=4.0)
+    parser.add_argument("--dat-drop-rate", type=float, default=0.0)
+    parser.add_argument("--dat-attn-drop-rate", type=float, default=0.0)
+    parser.add_argument("--dat-drop-path-rate", type=float, default=0.05)
+    parser.add_argument("--dat-offset-scale", type=float, default=0.5)
+
     parser.add_argument("--skip-one2one-deformable", action="store_true")
     parser.add_argument("--skip-rtdetr-full", action="store_true")
+    parser.add_argument("--skip-swin-backbone", action="store_true")
+    parser.add_argument("--skip-dat-backbone", action="store_true")
     parser.add_argument("--skip-transformer-neck", action="store_true")
     parser.add_argument("--skip-transformer-neck-deformable", action="store_true")
     parser.add_argument("--skip-comparison", action="store_true")
@@ -309,6 +335,74 @@ def run_transformer_neck_deformable(args, input_channels: int):
         cleanup()
 
 
+def build_swin_backbone_ablation(args, output_dir: Path, *, device: str, input_channels: int):
+    return YOLOv11SwinBackbone(
+        output_dir=str(output_dir),
+        num_classes=args.num_classes,
+        reg_max=args.reg_max,
+        device=device,
+        input_canals=input_channels,
+        width_mult=args.width_mult,
+        swin_embed_dim=None if args.swin_embed_dim <= 0 else args.swin_embed_dim,
+        swin_depths=tuple(args.swin_depths),
+        swin_num_heads=tuple(args.swin_num_heads),
+        swin_window_size=args.swin_window_size,
+        swin_mlp_ratio=args.swin_mlp_ratio,
+        swin_drop_rate=args.swin_drop_rate,
+        swin_attn_drop_rate=args.swin_attn_drop_rate,
+        swin_drop_path_rate=args.swin_drop_path_rate,
+    )
+
+
+def run_swin_backbone(args, input_channels: int):
+    name = "yolov11n_swin_backbone_full_train"
+    output_dir = Path(args.output_root) / name
+    if args.skip_swin_backbone or should_skip(name, output_dir, args.overwrite):
+        return
+    print(f"\n[RUN] {name} on {args.swin_device}")
+    model = build_swin_backbone_ablation(args, output_dir, device=args.swin_device, input_channels=input_channels)
+    try:
+        fit_yolo_model(model, args, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, patience=args.patience)
+    finally:
+        del model
+        cleanup()
+
+
+def build_dat_backbone_ablation(args, output_dir: Path, *, device: str, input_channels: int):
+    return YOLOv11DATBackbone(
+        output_dir=str(output_dir),
+        num_classes=args.num_classes,
+        reg_max=args.reg_max,
+        device=device,
+        input_canals=input_channels,
+        width_mult=args.width_mult,
+        dat_embed_dim=None if args.dat_embed_dim <= 0 else args.dat_embed_dim,
+        dat_depths=tuple(args.dat_depths),
+        dat_num_heads=tuple(args.dat_num_heads),
+        dat_window_size=args.dat_window_size,
+        dat_num_points=args.dat_num_points,
+        dat_mlp_ratio=args.dat_mlp_ratio,
+        dat_drop_rate=args.dat_drop_rate,
+        dat_attn_drop_rate=args.dat_attn_drop_rate,
+        dat_drop_path_rate=args.dat_drop_path_rate,
+        dat_offset_scale=args.dat_offset_scale,
+    )
+
+
+def run_dat_backbone(args, input_channels: int):
+    name = "yolov11n_dat_backbone_full_train"
+    output_dir = Path(args.output_root) / name
+    if args.skip_dat_backbone or should_skip(name, output_dir, args.overwrite):
+        return
+    print(f"\n[RUN] {name} on {args.dat_device}")
+    model = build_dat_backbone_ablation(args, output_dir, device=args.dat_device, input_channels=input_channels)
+    try:
+        fit_yolo_model(model, args, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, patience=args.patience)
+    finally:
+        del model
+        cleanup()
+
+
 def experiment_specs(args, input_channels: int):
     root = Path(args.output_root)
     return [
@@ -361,6 +455,22 @@ def experiment_specs(args, input_channels: int):
                 dim_feedforward=args.dim_feedforward,
                 dropout=args.dropout,
                 matcher_num_threads=args.matcher_num_threads,
+            ),
+        },
+        {
+            "name": "yolov11n_swin_backbone_full_train",
+            "kind": "yolo",
+            "output_dir": root / "yolov11n_swin_backbone_full_train",
+            "build": lambda output_dir, device: build_swin_backbone_ablation(
+                args, output_dir, device=device, input_channels=input_channels
+            ),
+        },
+        {
+            "name": "yolov11n_dat_backbone_full_train",
+            "kind": "yolo",
+            "output_dir": root / "yolov11n_dat_backbone_full_train",
+            "build": lambda output_dir, device: build_dat_backbone_ablation(
+                args, output_dir, device=device, input_channels=input_channels
             ),
         },
         {
@@ -872,6 +982,8 @@ def main():
     print(f"    - YOLOv11 best -> RTDETR one2one deformable head on {args.one2one_device}")
     print(f"    - transformer neck deformable full training on {args.transformer_neck_device}")
     print(f"    - RTDETR with YOLOv11 backbone and RTDETR hybrid neck on {args.rtdetr_device}")
+    print(f"    - YOLOv11 with Swin backbone full training on {args.swin_device}")
+    print(f"    - YOLOv11 with DAT backbone full training on {args.dat_device}")
     print(f"    - transformer neck dense full training on {args.transformer_neck_device}")
 
     if args.dry_run:
@@ -881,6 +993,8 @@ def main():
     run_one2one_rtdetr_head(args, input_channels)
     run_transformer_neck_deformable(args, input_channels)
     run_full_rtdetr(args, input_channels)
+    run_swin_backbone(args, input_channels)
+    run_dat_backbone(args, input_channels)
     run_transformer_neck(args, input_channels)
     if not args.skip_comparison:
         run_final_comparison(args, input_channels)
