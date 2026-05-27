@@ -26,7 +26,6 @@ from detector2026.core.models.yolov11 import YOLOv11  # noqa: E402
 from detector2026.core.models.yolov11_ablation import (  # noqa: E402
     YOLOv11DATBackbone,
     YOLOv11NoNeck,
-    YOLOv11NoNeckScaleDeformableDecoder,
     YOLOv11P3Direct,
     YOLOv11P3RTDETR,
     YOLOv11RTDETR,
@@ -516,28 +515,6 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
                 use_deformable_attention=True,
                 **yolo_common,
                 **rtdetr_common,
-            ),
-        ),
-        EvalSpec(
-            "YOLOv11_NoNeck_ScaleDeformableDecoder",
-            "one2one",
-            first_existing_ckpt(
-                ckpt(yolo_root, "yolov11n_no_neck_scale_deformable_decoder_head_only"),
-                ckpt(yolo_complete_root, "yolov11n_no_neck_scale_deformable_decoder_head_only"),
-            ),
-            "specificres",
-            lambda output_dir: YOLOv11NoNeckScaleDeformableDecoder(
-                output_dir=output_dir,
-                hidden_dim=128,
-                query_counts=(64, 32, 16),
-                num_decoder_layers=3,
-                num_heads=8,
-                num_decoder_points=16,
-                dim_feedforward=1024,
-                dropout=0.0,
-                matcher_num_threads=8,
-                freeze_backbone=True,
-                **yolo_common,
             ),
         ),
         EvalSpec(
