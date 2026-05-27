@@ -139,6 +139,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Persist raw TP/FP/FN stats. Disabled by default because files can be hundreds of MB per model.",
     )
+    parser.add_argument("--overwrite", action="store_true", help="Re-evaluate models already marked status=ok.")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -372,6 +373,7 @@ def make_fused_loader(args: argparse.Namespace) -> DataLoader:
         data_dir=str(Path(args.data_dir) / args.split / "data"),
         labels_dir=str(Path(args.data_dir) / args.split / "labels_detect"),
         res_keys=DEFAULT_RES_KEYS,
+        max_dim=10**9,
         preprocessing=args.preprocessing,
     )
     return DataLoader(
@@ -384,14 +386,24 @@ def make_fused_loader(args: argparse.Namespace) -> DataLoader:
     )
 
 
-def load_checkpoint(model: torch.nn.Module, checkpoint: Path, device: str) -> None:
+def load_checkpoint(model: torch.nn.Module, checkpoint: Path, device: str) -> dict[str, Any]:
     if hasattr(model, "load_weights"):
-        model.load_weights(str(checkpoint), device=device, eval_mode=True)
+        missing, unexpected = model.load_weights(str(checkpoint), device=device, eval_mode=True)
+        return {
+            "method": "load_weights",
+            "missing_keys": len(missing),
+            "unexpected_keys": len(unexpected),
+        }
     else:
         state = torch.load(checkpoint, map_location=device)
-        model.load_state_dict(state)
+        incompatible = model.load_state_dict(state)
         model.to(device)
         model.eval()
+        return {
+            "method": "load_state_dict",
+            "missing_keys": len(incompatible.missing_keys),
+            "unexpected_keys": len(incompatible.unexpected_keys),
+        }
 
 
 def configure_eval_head(model: torch.nn.Module, spec: EvalSpec) -> None:
@@ -718,7 +730,7 @@ def evaluate_one(
     model_output_dir = output_dir / "model_outputs" / spec.name
     model = spec.builder(str(model_output_dir))
     try:
-        load_checkpoint(model, spec.checkpoint, args.device)
+        load_info = load_checkpoint(model, spec.checkpoint, args.device)
         configure_eval_head(model, spec)
         model.eval()
         metrics_json = output_dir / "json" / f"{spec.name}.json"
@@ -762,6 +774,9 @@ def evaluate_one(
                 "model": spec.name,
                 "family": spec.family,
                 "checkpoint": str(spec.checkpoint),
+                "load_method": load_info["method"],
+                "load_missing_keys": load_info["missing_keys"],
+                "load_unexpected_keys": load_info["unexpected_keys"],
                 "metrics_json": str(metrics_json),
                 "compact_stats_json": str(compact_stats_json),
                 "full_stats_json": str(full_stats_json) if args.save_full_stats else "",
@@ -802,6 +817,9 @@ def write_csv(rows: list[dict[str, Any]], csv_path: Path) -> None:
         "redundant_iou_mean",
         "conf_thresh",
         "checkpoint",
+        "load_method",
+        "load_missing_keys",
+        "load_unexpected_keys",
         "metrics_json",
         "compact_stats_json",
         "full_stats_json",
@@ -811,6 +829,33 @@ def write_csv(rows: list[dict[str, Any]], csv_path: Path) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow({key: row.get(key, "") for key in fieldnames})
+
+
+def read_existing_rows(csv_path: Path) -> list[dict[str, Any]]:
+    if not csv_path.is_file():
+        return []
+    with open(csv_path, "r", newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def row_is_reusable(row: dict[str, Any]) -> bool:
+    if row.get("status") != "ok":
+        return False
+    compact_path = row.get("compact_stats_json", "")
+    metrics_path = row.get("metrics_json", "")
+    if compact_path and not Path(compact_path).is_file():
+        return False
+    if metrics_path and not Path(metrics_path).is_file():
+        return False
+    return True
+
+
+def merge_rows_by_model(existing_rows: list[dict[str, Any]], new_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged = {row.get("model", ""): row for row in existing_rows if row.get("model")}
+    for row in new_rows:
+        if row.get("model"):
+            merged[row["model"]] = row
+    return list(merged.values())
 
 
 def plot_bars(rows: list[dict[str, Any]], output_dir: Path) -> None:
@@ -1015,19 +1060,32 @@ def main() -> None:
     if args.dry_run:
         return
 
+    csv_path = output_dir / "ablation_fine_metrics.csv"
+    existing_rows = read_existing_rows(csv_path)
+    reusable_rows_by_model = {
+        row["model"]: row
+        for row in existing_rows
+        if row.get("model") and row_is_reusable(row)
+    }
+    if reusable_rows_by_model and not args.overwrite:
+        print(f"[INFO] reprise: {len(reusable_rows_by_model)} modèles déjà évalués seront conservés")
+
     specific_loader = make_specific_loader(args)
     fused_loader = make_fused_loader(args)
     loaders = {"specificres": specific_loader, "fused": fused_loader}
     class_index_to_name = load_class_index_to_name(Path(args.data_dir))
 
-    rows: list[dict[str, Any]] = []
+    new_rows: list[dict[str, Any]] = []
     for index, spec in enumerate(specs, 1):
         print(f"\n[{index}/{len(specs)}] {spec.name}")
+        if not args.overwrite and spec.name in reusable_rows_by_model:
+            print(f"[SKIP] {spec.name}: déjà évalué avec status=ok")
+            continue
         if not spec.checkpoint.is_file():
             message = f"checkpoint missing: {spec.checkpoint}"
             print(f"[SKIP] {message}")
             if args.include_missing:
-                rows.append(
+                new_rows.append(
                     {
                         "model": spec.name,
                         "family": spec.family,
@@ -1038,7 +1096,7 @@ def main() -> None:
             continue
         try:
             row = evaluate_one(spec, loaders[spec.dataset_mode], args, output_dir, class_index_to_name)
-            rows.append(row)
+            new_rows.append(row)
             print(
                 "[OK] "
                 f"mAP50={row['map50']:.4f} "
@@ -1048,7 +1106,7 @@ def main() -> None:
             )
         except Exception as exc:
             print(f"[ERROR] {spec.name}: {exc}")
-            rows.append(
+            new_rows.append(
                 {
                     "model": spec.name,
                     "family": spec.family,
@@ -1058,7 +1116,7 @@ def main() -> None:
             )
             cleanup()
 
-    csv_path = output_dir / "ablation_fine_metrics.csv"
+    rows = merge_rows_by_model([] if args.overwrite else existing_rows, new_rows)
     write_csv(rows, csv_path)
     plot_bars(rows, output_dir)
     plot_curves(rows, output_dir)

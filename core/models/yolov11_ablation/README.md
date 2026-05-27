@@ -426,6 +426,33 @@ image -> backbone YOLOv11n -> P3, P4, P5 -> Detect
 
 La loss reste la loss YOLO standard avec `TaskAlignedAssigner`. Cette ablation teste uniquement si le neck multi-échelle YOLO apporte un gain par rapport à des têtes appliquées directement sur les features backbone.
 
+### 3.5. No-Neck Avec Décodeurs Déformables Par Échelle
+
+Cette ablation reprend `YOLOv11NoNeck` : le backbone YOLOv11n produit directement \(P_3, P_4, P_5\), sans neck FPN/PAN. La tête YOLO dense est remplacée par trois décodeurs déformables indépendants, spécialisés par taille d'objet :
+
+```text
+image -> backbone YOLOv11n -> P3, P4, P5
+P3 -> decoder petits objets  -> 64 queries
+P4 -> decoder objets moyens  -> 32 queries
+P5 -> decoder grands objets  -> 16 queries
+```
+
+Chaque décodeur contient trois couches successives d'attention déformable mono-niveau. À chaque couche, une query échantillonne `16` points dans la carte \(P_l\) correspondante :
+
+\[
+Q_l^{(t+1)} =
+\operatorname{DeformAttn}(Q_l^{(t)}, P_l, b_l^{(t)}, K=16)
+\]
+
+Les niveaux sont supervisés selon la taille de l'objet relativement à l'échelle d'ancre ou au stride : \(P_3\) pour les petits objets, \(P_4\) pour les moyens, \(P_5\) pour les grands. Les boîtes sont raffinées couche par couche :
+
+\[
+b_l^{(t+1)} =
+\sigma\left(\Delta b_l^{(t)} + \sigma^{-1}(b_l^{(t)})\right)
+\]
+
+La sortie finale concatène les prédictions des trois niveaux, soit `64 + 32 + 16 = 112` queries one-to-one. Cette variante teste une détection end-to-end spécialisée par échelle, sans neck et sans tête YOLO dense.
+
 ## 4. YOLOv11TransformerNeck
 
 `YOLOv11TransformerNeck` conserve le backbone YOLOv11 jusqu'aux cartes multi-échelles \(P_3, P_4, P_5\), puis remplace le neck FPN/PAN convolutionnel par `TransformerPyramidNeck`. La tête de détection reste une tête YOLO classique `Detect`.
