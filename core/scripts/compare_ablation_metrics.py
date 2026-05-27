@@ -21,7 +21,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 from detector2026.core.models.mr_yolo import MR_YOLO  # noqa: E402
 from detector2026.core.models.mr_yolo_ablation import (  # noqa: E402
     MRYOLOBranchCrossAttentionAblation,
-    MRYOLOInputCrossAttentionAblation,
 )
 from detector2026.core.models.yolov11 import YOLOv11  # noqa: E402
 from detector2026.core.models.yolov11_ablation import (  # noqa: E402
@@ -663,23 +662,6 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
             ),
         ),
         EvalSpec(
-            "MRYOLOInputCrossAttention_deformable",
-            "mr_yolo",
-            ckpt(mr_root, "mr_yolo_input_cross_attention_deformable"),
-            "fused",
-            lambda output_dir: MRYOLOInputCrossAttentionAblation(
-                output_dir=output_dir,
-                fusion_mode="deformable",
-                encoder_channels=16,
-                center_resolution_index=0,
-                fusion_d_model=128,
-                fusion_num_heads=4,
-                fusion_num_layers=1,
-                fusion_num_points=4,
-                **mr_common,
-            ),
-        ),
-        EvalSpec(
             "MRYOLOBranchCrossAttention_global",
             "mr_yolo",
             ckpt(mr_root, "mr_yolo_branch_cross_attention_global"),
@@ -692,22 +674,6 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
                 fusion_num_heads=4,
                 fusion_num_layers=1,
                 outfusion_channels_mult=2,
-                **mr_common,
-            ),
-        ),
-        EvalSpec(
-            "MRYOLOInputCrossAttention_global",
-            "mr_yolo",
-            ckpt(mr_root, "mr_yolo_input_cross_attention_global"),
-            "fused",
-            lambda output_dir: MRYOLOInputCrossAttentionAblation(
-                output_dir=output_dir,
-                fusion_mode="global",
-                encoder_channels=16,
-                center_resolution_index=0,
-                fusion_d_model=128,
-                fusion_num_heads=4,
-                fusion_num_layers=1,
                 **mr_common,
             ),
         ),
