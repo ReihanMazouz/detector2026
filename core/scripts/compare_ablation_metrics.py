@@ -61,6 +61,10 @@ DEFAULT_P3_ROOT = (
     "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/"
     "yolov11n_p3_rtdetr_ablation"
 )
+DEFAULT_ONE2ONE_ROOT = (
+    "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/"
+    "one2one_head"
+)
 DEFAULT_MR_ABLATION_ROOT = (
     "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/"
     "mr_yolo_ablation"
@@ -104,6 +108,7 @@ def parse_args() -> argparse.Namespace:
         help="Optional fallback root used for ablations only present in the complete run folder.",
     )
     parser.add_argument("--p3-root", default=DEFAULT_P3_ROOT)
+    parser.add_argument("--one2one-root", default=DEFAULT_ONE2ONE_ROOT)
     parser.add_argument("--mr-ablation-root", default=DEFAULT_MR_ABLATION_ROOT)
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--batch-size", type=int, default=16)
@@ -200,6 +205,71 @@ def recall_for_size_band(stats: dict[str, Any], conf_thresh: float, left: float,
     return float(tp / denom) if denom else float("nan")
 
 
+def box_characterization_stats(stats: dict[str, Any], conf_thresh: float) -> dict[str, float]:
+    ious = []
+    center_errors = []
+    wh_errors = []
+    area_ratios = []
+    for rec in stats.get("tp", []):
+        if float(rec.get("score", 0.0)) < conf_thresh:
+            continue
+        pred_box = rec.get("pred_box")
+        gt_box = rec.get("gt_box")
+        if not pred_box or not gt_box:
+            continue
+        px1, py1, px2, py2 = map(float, pred_box)
+        gx1, gy1, gx2, gy2 = map(float, gt_box)
+        pw = max(px2 - px1, 0.0)
+        ph = max(py2 - py1, 0.0)
+        gw = max(gx2 - gx1, 1e-12)
+        gh = max(gy2 - gy1, 1e-12)
+        pcx = 0.5 * (px1 + px2)
+        pcy = 0.5 * (py1 + py2)
+        gcx = 0.5 * (gx1 + gx2)
+        gcy = 0.5 * (gy1 + gy2)
+        ious.append(float(rec.get("max_iou", float("nan"))))
+        center_errors.append(float(((pcx - gcx) ** 2 + (pcy - gcy) ** 2) ** 0.5))
+        wh_errors.append(float(0.5 * (abs(pw - gw) / gw + abs(ph - gh) / gh)))
+        area_ratios.append(float((pw * ph) / max(gw * gh, 1e-12)))
+
+    def mean(values: list[float]) -> float:
+        arr = np.asarray([value for value in values if not math.isnan(value)], dtype=float)
+        return float(arr.mean()) if arr.size else float("nan")
+
+    def median(values: list[float]) -> float:
+        arr = np.asarray([value for value in values if not math.isnan(value)], dtype=float)
+        return float(np.median(arr)) if arr.size else float("nan")
+
+    return {
+        "box_iou_mean": mean(ious),
+        "box_iou_median": median(ious),
+        "box_center_error_mean": mean(center_errors),
+        "box_wh_relative_error_mean": mean(wh_errors),
+        "box_area_ratio_mean": mean(area_ratios),
+    }
+
+
+def redundancy_stats(stats: dict[str, Any], conf_thresh: float) -> dict[str, float]:
+    tp_count = sum(1 for rec in stats.get("tp", []) if float(rec.get("score", 0.0)) >= conf_thresh)
+    gt_count = len(stats.get("tp", [])) + len(stats.get("fn", []))
+    redundant = [
+        rec for rec in stats.get("redundant", [])
+        if float(rec.get("score", 0.0)) >= conf_thresh
+    ]
+    redundant_count = len(redundant)
+    redundant_ious = [
+        float(rec.get("max_iou", float("nan")))
+        for rec in redundant
+        if not math.isnan(float(rec.get("max_iou", float("nan"))))
+    ]
+    return {
+        "redundant_boxes": float(redundant_count),
+        "redundant_boxes_per_gt": float(redundant_count / gt_count) if gt_count else float("nan"),
+        "redundant_boxes_per_tp": float(redundant_count / tp_count) if tp_count else float("nan"),
+        "redundant_iou_mean": float(np.mean(redundant_ious)) if redundant_ious else float("nan"),
+    }
+
+
 def summarize_metrics(
     full_metrics: dict[str, Any],
     stats: dict[str, Any],
@@ -214,8 +284,10 @@ def summarize_metrics(
     recall_curve = recall_snr.get("recall")
     conf_thresh = float(full_metrics.get("conf_thresh", 0.0))
     small_max, medium_max = map(float, args.size_thresholds)
+    box_stats = box_characterization_stats(stats, conf_thresh)
+    duplicate_stats = redundancy_stats(stats, conf_thresh)
 
-    return {
+    summary = {
         "map50": float(map_stats.get("mAP50", float("nan"))),
         "map50_95": float(map_stats.get("mAP50:95", float("nan"))),
         "params": float(params) if params is not None else float("nan"),
@@ -232,6 +304,9 @@ def summarize_metrics(
         "recall_medium": recall_for_size_band(stats, conf_thresh, small_max, medium_max),
         "recall_large": recall_for_size_band(stats, conf_thresh, medium_max, None),
     }
+    summary.update(box_stats)
+    summary.update(duplicate_stats)
+    return summary
 
 
 def sanitize_filename(value: str) -> str:
@@ -319,12 +394,18 @@ def load_checkpoint(model: torch.nn.Module, checkpoint: Path, device: str) -> No
         model.eval()
 
 
+def configure_eval_head(model: torch.nn.Module, spec: EvalSpec) -> None:
+    if spec.family in {"one2one", "one2one_yolo"} and hasattr(model, "use_one2one_head"):
+        model.use_one2one_head()
+
+
 def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
     input_channels = preprocessing_num_channels(args.preprocessing)
     training_root = Path(args.training_root)
     yolo_root = Path(args.yolo_ablation_root)
     yolo_complete_root = Path(args.yolo_ablation_complete_root)
     p3_root = Path(args.p3_root)
+    one2one_root = Path(args.one2one_root)
     mr_root = Path(args.mr_ablation_root)
     input_resolutions = find_input_resolutions(args.data_dir, split=args.split)
 
@@ -357,6 +438,10 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
     def ckpt(root: Path, name: str) -> Path:
         return root / name / "best.pt"
 
+    def ckpt_or_file(root: Path, name: str) -> Path:
+        direct = root / name
+        return direct if direct.is_file() else direct / "best.pt"
+
     def first_existing_ckpt(*candidates: Path) -> Path:
         for candidate in candidates:
             if candidate.is_file():
@@ -375,11 +460,22 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
             "YOLOv11_No_Neck",
             "yolo",
             first_existing_ckpt(
+                ckpt(yolo_complete_root, "yolov11n_no_neck_direct_p3p4p5"),
                 ckpt(yolo_root, "yolov11n_no_neck_full_train"),
                 ckpt(yolo_complete_root, "yolov11n_no_neck_full_train"),
             ),
             "specificres",
             lambda output_dir: YOLOv11NoNeck(output_dir=output_dir, **yolo_common),
+        ),
+        EvalSpec(
+            "YOLOv11_One2One_TAL",
+            "one2one_yolo",
+            first_existing_ckpt(
+                ckpt_or_file(one2one_root, "best_one2one_benchmark_tal"),
+                ckpt(one2one_root, "yolov11n_specificres_cfg512_one2one_tal"),
+            ),
+            "specificres",
+            lambda output_dir: YOLOv11(output_dir=output_dir, **yolo_common),
         ),
         EvalSpec(
             "YOLOv11RTDETRHead",
@@ -623,6 +719,7 @@ def evaluate_one(
     model = spec.builder(str(model_output_dir))
     try:
         load_checkpoint(model, spec.checkpoint, args.device)
+        configure_eval_head(model, spec)
         model.eval()
         metrics_json = output_dir / "json" / f"{spec.name}.json"
         compact_stats_json = output_dir / "stats_compact" / f"{spec.name}.json"
@@ -694,6 +791,15 @@ def write_csv(rows: list[dict[str, Any]], csv_path: Path) -> None:
         "recall_small",
         "recall_medium",
         "recall_large",
+        "box_iou_mean",
+        "box_iou_median",
+        "box_center_error_mean",
+        "box_wh_relative_error_mean",
+        "box_area_ratio_mean",
+        "redundant_boxes",
+        "redundant_boxes_per_gt",
+        "redundant_boxes_per_tp",
+        "redundant_iou_mean",
         "conf_thresh",
         "checkpoint",
         "metrics_json",
@@ -727,6 +833,11 @@ def plot_bars(rows: list[dict[str, Any]], output_dir: Path) -> None:
         ("recall_small", "Recall small objects"),
         ("recall_medium", "Recall medium objects"),
         ("recall_large", "Recall large objects"),
+        ("box_iou_mean", "Mean TP IoU"),
+        ("box_center_error_mean", "Mean center error"),
+        ("box_wh_relative_error_mean", "Mean relative size error"),
+        ("redundant_boxes_per_gt", "Redundant boxes per GT"),
+        ("redundant_boxes_per_tp", "Redundant boxes per TP"),
     ]
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -740,7 +851,8 @@ def plot_bars(rows: list[dict[str, Any]], output_dir: Path) -> None:
         ax.set_yticks(y)
         ax.set_yticklabels(names, fontsize=8)
         ax.invert_yaxis()
-        ax.set_xlim(0.0, 1.0)
+        if key not in {"box_center_error_mean", "box_wh_relative_error_mean", "redundant_boxes_per_gt", "redundant_boxes_per_tp"}:
+            ax.set_xlim(0.0, 1.0)
         ax.set_xlabel(title)
         ax.set_title(title)
         ax.grid(axis="x", linestyle="--", alpha=0.35)

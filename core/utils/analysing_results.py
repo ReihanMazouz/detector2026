@@ -1,4 +1,4 @@
-from .metrics import match_boxes_iou, compute_ap
+from .metrics import match_boxes_iou, compute_ap, box_iou
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -111,6 +111,32 @@ def analyse_results(pred_boxes:  torch.Tensor,
             rec["gt_idx"] = gid
         tps.append(rec)
 
+    # ----------------- Redundant predictions -----------------
+    redundants: List[Dict[str, Any]] = []
+    if ignore_redundant_fp and len(redundant_preds) and len(gt_boxes):
+        match_ious = box_iou(pred_boxes, gt_boxes)
+        for p_idx in sorted(redundant_preds):
+            rec = dict(
+                pred_box=pred_boxes[p_idx].tolist(),
+                score=float(pred_scores[p_idx]),
+                label=int(pred_labels[p_idx]),
+            )
+            if match_ious is not None:
+                max_iou, g_idx = match_ious[p_idx].max(dim=0)
+                g_idx = int(g_idx.item())
+                w, h = _gt_wh(g_idx)
+                rec.update(
+                    gt_box=gt_boxes[g_idx].tolist(),
+                    gt_wh=[w, h],
+                    gt_label=int(gt_labels[g_idx]),
+                    snr=float(gt_snrs[g_idx]),
+                    max_iou=float(max_iou.item()),
+                )
+                gid = _maybe_id(g_idx)
+                if gid is not None:
+                    rec["gt_idx"] = gid
+            redundants.append(rec)
+
     # ----------------- FP -----------------
     fps: List[Dict[str, Any]] = []
     for i in range(len(pred_boxes)):
@@ -141,7 +167,7 @@ def analyse_results(pred_boxes:  torch.Tensor,
                 rec["gt_idx"] = gid
             fns.append(rec)
 
-    return dict(tp=tps, fp=fps, fn=fns)
+    return dict(tp=tps, fp=fps, fn=fns, redundant=redundants)
 
 
 
@@ -163,7 +189,7 @@ def analyse_dataset(model,
                  pour nommer les colonnes PSNR dans les sorties.
     """
     device = model.device
-    agg: Dict[str, List[Dict[str, Any]]] = dict(tp=[], fp=[], fn=[])
+    agg: Dict[str, List[Dict[str, Any]]] = dict(tp=[], fp=[], fn=[], redundant=[])
 
     model.eval()
     with torch.no_grad():
@@ -247,6 +273,7 @@ def analyse_dataset(model,
                 agg["tp"].extend(res["tp"])
                 agg["fp"].extend(res["fp"])
                 agg["fn"].extend(res["fn"])
+                agg["redundant"].extend(res.get("redundant", []))
 
     return agg
 
