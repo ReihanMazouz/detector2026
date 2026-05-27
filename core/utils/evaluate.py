@@ -45,6 +45,10 @@ class EvalRunner:
             "avg_recall_low_snr",     # [-10, 0]
             "avg_recall_medium_snr",  # [0, 10]
             "avg_recall_high_snr",    # [10, s_max]
+            "recall_small",
+            "recall_medium",
+            "recall_large",
+            "box_iou_mean",
             "metrics_json_path",
         ]
 
@@ -95,12 +99,19 @@ class EvalRunner:
             avg_med  = self._avg_recall_between(snr_bins, recall_curve,   0.0, s_max)
             avg_high = self._avg_recall_between(snr_bins, recall_curve, 10.0, s_max)
 
+        recall_size = full_metrics.get("recall_size_summary", {})
+        box_quality = full_metrics.get("box_quality", {})
+
         return {
             "map50": map50,
             "map50_95": map50_95,
             "avg_recall_low_snr": avg_low,
             "avg_recall_medium_snr": avg_med,
             "avg_recall_high_snr": avg_high,
+            "recall_small": recall_size.get("recall_small"),
+            "recall_medium": recall_size.get("recall_medium"),
+            "recall_large": recall_size.get("recall_large"),
+            "box_iou_mean": box_quality.get("box_iou_mean"),
         }
 
     def _save_full_metrics_json(self, full_metrics: Dict[str, Any], path: Path) -> Path:
@@ -140,6 +151,10 @@ class EvalRunner:
             summary["avg_recall_low_snr"],
             summary["avg_recall_medium_snr"],
             summary["avg_recall_high_snr"],
+            summary["recall_small"],
+            summary["recall_medium"],
+            summary["recall_large"],
+            summary["box_iou_mean"],
             str(json_path),
         ]
 
@@ -286,12 +301,12 @@ class TrainingPlots:
 
     @staticmethod
     def _read_column(csv_path: str, col_name: str) -> Tuple[List[float], List[float]]:
-        epochs, values = [], []
+        pairs = []
         with open(csv_path, "r", newline="") as f:
             r = csv.reader(f)
             header = next(r)
             if not header or col_name not in header:
-                return epochs, values
+                return [], []
             i_epoch = header.index("epoch")
             i_col = header.index(col_name)
             for row in r:
@@ -303,9 +318,14 @@ class TrainingPlots:
                     v = float(v_str)
                 except Exception:
                     continue
-                epochs.append(e)
-                values.append(v)
-        return epochs, values
+                if not (np.isfinite(e) and np.isfinite(v)):
+                    continue
+                pairs.append((e, v))
+        pairs.sort(key=lambda item: item[0])
+        if not pairs:
+            return [], []
+        epochs, values = zip(*pairs)
+        return list(epochs), list(values)
 
     # --- Styling context -----------------------------------------------------
     @staticmethod
@@ -414,15 +434,16 @@ class TrainingPlots:
             def _me(vals): return max(1, len(vals) // 10)
             if e_low and v_low:
                 ax.plot(e_low, v_low,  label="Avg recall (low SNR)",
-                        marker="o", markersize=3.2, markevery=_me(v_low))
+                        marker="o", markersize=3.2, markevery=_me(v_low), solid_capstyle="round")
             if e_med and v_med:
                 ax.plot(e_med, v_med,  label="Avg recall (medium SNR)",
-                        linestyle="--", marker="s", markersize=3.0, markevery=_me(v_med))
+                        linestyle="--", marker="s", markersize=3.0, markevery=_me(v_med), solid_capstyle="round")
             if e_high and v_high:
                 ax.plot(e_high, v_high, label="Avg recall (high SNR)",
-                        linestyle="-.", marker="^", markersize=3.2, markevery=_me(v_high))
+                        linestyle="-.", marker="^", markersize=3.2, markevery=_me(v_high), solid_capstyle="round")
 
             TrainingPlots._apply_ax_style(ax, xlabel="Epoch", ylabel="Average recall",
                                           title="Average Recall per SNR band")
+            ax.set_ylim(-0.02, 1.02)
             TrainingPlots._export(fig, save_path)
             plt.close(fig)

@@ -302,7 +302,7 @@ class YOLOv11RTDETRHead(YOLOv11):
                 eval_result = eval_runner.run(epoch=epoch, model=self, val_loader=val_loader)
                 extra_values = eval_result["extra_values"]
             else:
-                extra_values = [None, None, float("nan"), float("nan"), float("nan"), None] if run_full_eval else []
+                extra_values = [None, None, *([float("nan")] * 7), None] if run_full_eval else []
 
             with log_path.open("a", newline="") as handle:
                 writer = csv.writer(handle)

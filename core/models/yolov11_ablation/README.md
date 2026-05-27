@@ -738,6 +738,7 @@ Les coûts ci-dessous sont calculés avec `core/scripts/report_model_costs.py`. 
 | YOLOv11_RTDETR_Full | 1x1x256x256 | 7.28M | 1.26G | 2.52G | 59.16M |
 | YOLOv11_P3_Direct | 1x1x256x256 | 232.85K | 313.20M | 626.39M | 0 |
 | YOLOv11_P3_RTDETR | 1x1x256x256 | 3.07M | 661.22M | 1.32G | 57.83M |
+| YOLOv11_NoNeck_ScaleDeformableDecoder | 1x1x256x256 | 6.02M | 703.18M | 1.41G | 34.04M |
 | YOLOv11_Transformer_Neck | 1x1x256x256 | 3.13M | 1.21G | 2.41G | 669.12M |
 | YOLOv11_Deformable_Neck | 1x1x256x256 | 3.12M | 699.86M | 1.40G | 3.70M |
 | YOLOv11_Swin_Backbone | 1x1x256x256 | 6.10M | 3.28G | 6.56G | 142.61M |

@@ -120,6 +120,7 @@ from detector2026.core.models.yolov11_ablation.yolov11_no_neck import YOLOv11NoN
 from detector2026.core.models.yolov11_ablation.yolov11_p3_rtdetr import YOLOv11P3Direct, YOLOv11P3RTDETR
 from detector2026.core.models.yolov11_ablation.yolov11_rtdetr import YOLOv11RTDETR
 from detector2026.core.models.yolov11_ablation.yolov11_rtdetr_head import YOLOv11RTDETRHead
+from detector2026.core.models.yolov11_ablation.yolov11_scale_deformable_decoder import YOLOv11NoNeckScaleDeformableDecoder
 from detector2026.core.models.yolov11_ablation.yolov11_swin_backbone import YOLOv11SwinBackbone
 from detector2026.core.models.yolov11_ablation.yolov11_transformer_neck import YOLOv11TransformerNeck
 from detector2026.core.models.Backbones.SwinBackbone import WindowAttention
@@ -137,6 +138,9 @@ DEFAULT_RTDETR_DECODER_LAYERS = 6
 DEFAULT_RTDETR_NUM_HEADS = 8
 DEFAULT_RTDETR_DECODER_POINTS = 4
 DEFAULT_P3_RTDETR_DECODER_POINTS = 16
+DEFAULT_SCALE_DECODER_QUERIES = (64, 32, 16)
+DEFAULT_SCALE_DECODER_LAYERS = 3
+DEFAULT_SCALE_DECODER_POINTS = 16
 DEFAULT_RTDETR_FFN_DIM = 1024
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "tmp"
 
@@ -382,6 +386,27 @@ def _build_yolov11_p3_rtdetr_model(device: str) -> YOLOv11P3RTDETR:
     return model
 
 
+def _build_yolov11_scale_deformable_decoder_model(device: str) -> YOLOv11NoNeckScaleDeformableDecoder:
+    model = YOLOv11NoNeckScaleDeformableDecoder(
+        output_dir="/tmp/yolov11_scale_deformable_decoder_profile",
+        num_classes=DEFAULT_NUM_CLASSES,
+        reg_max=DEFAULT_REG_MAX,
+        device=device,
+        input_canals=1,
+        width_mult=DEFAULT_WIDTH_MULT,
+        input_hw=DEFAULT_TF_HW,
+        hidden_dim=DEFAULT_RTDETR_HIDDEN_DIM,
+        query_counts=DEFAULT_SCALE_DECODER_QUERIES,
+        num_decoder_layers=DEFAULT_SCALE_DECODER_LAYERS,
+        num_heads=DEFAULT_RTDETR_NUM_HEADS,
+        num_decoder_points=DEFAULT_SCALE_DECODER_POINTS,
+        dim_feedforward=DEFAULT_RTDETR_FFN_DIM,
+        freeze_backbone=True,
+    )
+    model.eval()
+    return model
+
+
 def _build_yolov11_swin_backbone_model(device: str) -> YOLOv11SwinBackbone:
     model = YOLOv11SwinBackbone(
         output_dir="/tmp/yolov11_swin_backbone_profile",
@@ -586,6 +611,7 @@ def parse_args() -> argparse.Namespace:
             "yolov11-no-neck",
             "yolov11-p3-direct",
             "yolov11-p3-rtdetr",
+            "yolov11-scale-deformable-decoder",
             "yolov11-swin-backbone",
             "yolov11-rtdetr-head",
             "yolov11-rtdetr-full",
@@ -637,6 +663,10 @@ def main() -> int:
     if args.model in {"yolov11-p3-rtdetr", "yolov11-ablation", "all"}:
         p3_rtdetr_model = _build_yolov11_p3_rtdetr_model(args.device)
         rows.append(_summarize("YOLOv11_P3_RTDETR", p3_rtdetr_model, single_image_inputs))
+
+    if args.model in {"yolov11-scale-deformable-decoder", "yolov11-ablation", "all"}:
+        scale_decoder_model = _build_yolov11_scale_deformable_decoder_model(args.device)
+        rows.append(_summarize("YOLOv11_NoNeck_ScaleDeformableDecoder", scale_decoder_model, single_image_inputs))
 
     if args.model in {"yolov11-swin-backbone", "yolov11-ablation", "all"}:
         swin_backbone_model = _build_yolov11_swin_backbone_model(args.device)

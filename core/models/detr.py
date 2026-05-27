@@ -369,7 +369,7 @@ class DETR(BaseModel):
                 extra_values = eval_result["extra_values"]
             else:
                 extra_headers = eval_runner.extra_headers() if run_full_eval else []
-                extra_values = [None, None, float("nan"), float("nan"), float("nan"), None] if run_full_eval else []
+                extra_values = [None, None, *([float("nan")] * 7), None] if run_full_eval else []
 
             logger.log(
                 epoch=epoch,

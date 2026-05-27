@@ -641,7 +641,7 @@ class BaseModel(nn.Module):
                 result = eval_runner.run(epoch=epoch, model=self, val_loader=val_loader)
                 ev = result["extra_values"]
             else:
-                ev = [None, None, float("nan"), float("nan"), float("nan"), None]
+                ev = [None, None, *([float("nan")] * 7), None]
                 result = {
                     "did_eval": False,
                     "extra_headers": extra_headers,

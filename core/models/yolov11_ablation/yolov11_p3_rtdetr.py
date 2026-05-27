@@ -314,7 +314,7 @@ class YOLOv11P3RTDETR(YOLOv11P3Direct):
                 if should_eval:
                     extra_values = eval_runner.run(epoch=epoch, model=self, val_loader=val_loader)["extra_values"]
                 else:
-                    extra_values = [None, None, float("nan"), float("nan"), float("nan"), None]
+                    extra_values = [None, None, *([float("nan")] * 7), None]
 
             with log_path.open("a", newline="") as handle:
                 writer = csv.writer(handle)

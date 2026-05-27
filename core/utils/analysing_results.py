@@ -1057,6 +1057,8 @@ def stats_analysis_with_metrics(
         "tp_raw": int(len(stats["tp"])),
         "fp_raw": int(len(stats["fp"])),
     }
+    full_metrics["box_quality"] = box_quality_summary(stats, conf_thresh=conf_thresh)
+    full_metrics["recall_size_summary"] = recall_size_summary(stats, conf_thresh=conf_thresh)
 
     recall_snr = recall_per_snr_bin(
         stats,
@@ -1112,3 +1114,50 @@ def stats_analysis_with_metrics(
         full_metrics[f"conf_matrix_{label}_snr"] = mat
 
     return full_metrics
+
+
+def recall_size_summary(
+    stats: Dict[str, Any],
+    conf_thresh: float = 0.0,
+    small_max: float = 0.03,
+    medium_max: float = 0.08,
+) -> Dict[str, float]:
+    def recall_band(left: float, right: Optional[float]) -> float:
+        tp = 0
+        fn = 0
+        for rec in stats.get("tp", []):
+            if float(rec.get("score", 0.0)) < conf_thresh:
+                continue
+            wh = rec.get("gt_wh")
+            if not wh:
+                continue
+            size = float(min(wh))
+            if size >= left and (right is None or size < right):
+                tp += 1
+        for rec in stats.get("fn", []):
+            wh = rec.get("gt_wh")
+            if not wh:
+                continue
+            size = float(min(wh))
+            if size >= left and (right is None or size < right):
+                fn += 1
+        denom = tp + fn
+        return float(tp / denom) if denom else float("nan")
+
+    return {
+        "recall_small": recall_band(0.0, small_max),
+        "recall_medium": recall_band(small_max, medium_max),
+        "recall_large": recall_band(medium_max, None),
+    }
+
+
+def box_quality_summary(stats: Dict[str, Any], conf_thresh: float = 0.0) -> Dict[str, float]:
+    ious = [
+        float(rec.get("max_iou", float("nan")))
+        for rec in stats.get("tp", [])
+        if float(rec.get("score", 0.0)) >= conf_thresh
+    ]
+    finite_ious = np.asarray([value for value in ious if np.isfinite(value)], dtype=float)
+    return {
+        "box_iou_mean": float(finite_ious.mean()) if finite_ious.size else float("nan"),
+    }
