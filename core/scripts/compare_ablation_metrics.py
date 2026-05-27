@@ -26,6 +26,7 @@ from detector2026.core.models.yolov11 import YOLOv11  # noqa: E402
 from detector2026.core.models.yolov11_ablation import (  # noqa: E402
     YOLOv11DATBackbone,
     YOLOv11NoNeck,
+    YOLOv11NoNeckScaleDeformableDecoder,
     YOLOv11P3Direct,
     YOLOv11P3RTDETR,
     YOLOv11RTDETR,
@@ -410,6 +411,13 @@ def configure_eval_head(model: torch.nn.Module, spec: EvalSpec) -> None:
         model.use_one2one_head()
 
 
+def eval_img_size_for_model(model: torch.nn.Module, spec: EvalSpec, args: argparse.Namespace) -> tuple[int, int]:
+    if spec.dataset_mode == "fused" and hasattr(model, "input_resolutions"):
+        resolutions = list(getattr(model, "input_resolutions"))
+        return tuple(int(max(values)) for values in zip(*resolutions))
+    return tuple(args.res_hw)
+
+
 def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
     input_channels = preprocessing_num_channels(args.preprocessing)
     training_root = Path(args.training_root)
@@ -419,6 +427,11 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
     one2one_root = Path(args.one2one_root)
     mr_root = Path(args.mr_ablation_root)
     input_resolutions = find_input_resolutions(args.data_dir, split=args.split)
+    if len(input_resolutions) != len(DEFAULT_RES_KEYS):
+        raise ValueError(
+            f"Expected {len(DEFAULT_RES_KEYS)} resolutions for MR models, "
+            f"found {len(input_resolutions)}: {input_resolutions}"
+        )
 
     yolo_common = dict(
         num_classes=args.num_classes,
@@ -503,6 +516,28 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
                 use_deformable_attention=True,
                 **yolo_common,
                 **rtdetr_common,
+            ),
+        ),
+        EvalSpec(
+            "YOLOv11_NoNeck_ScaleDeformableDecoder",
+            "one2one",
+            first_existing_ckpt(
+                ckpt(yolo_root, "yolov11n_no_neck_scale_deformable_decoder_head_only"),
+                ckpt(yolo_complete_root, "yolov11n_no_neck_scale_deformable_decoder_head_only"),
+            ),
+            "specificres",
+            lambda output_dir: YOLOv11NoNeckScaleDeformableDecoder(
+                output_dir=output_dir,
+                hidden_dim=128,
+                query_counts=(64, 32, 16),
+                num_decoder_layers=3,
+                num_heads=8,
+                num_decoder_points=16,
+                dim_feedforward=1024,
+                dropout=0.0,
+                matcher_num_threads=8,
+                freeze_backbone=True,
+                **yolo_common,
             ),
         ),
         EvalSpec(
@@ -699,6 +734,7 @@ def evaluate_one(
         load_info = load_checkpoint(model, spec.checkpoint, args.device)
         configure_eval_head(model, spec)
         model.eval()
+        eval_img_size = eval_img_size_for_model(model, spec, args)
         metrics_json = output_dir / "json" / f"{spec.name}.json"
         compact_stats_json = output_dir / "stats_compact" / f"{spec.name}.json"
         full_stats_json = output_dir / "stats_full" / f"{spec.name}.json"
@@ -709,7 +745,7 @@ def evaluate_one(
                 val_loader=loader,
                 iou_thresh=args.iou_thresh,
                 fa=args.false_alarm_target,
-                img_size=tuple(args.res_hw),
+                img_size=eval_img_size,
                 to_save=str(metrics_json),
                 to_plot=False,
                 stats_path=stats_path,
@@ -725,7 +761,7 @@ def evaluate_one(
                     val_loader=loader,
                     iou_thresh=args.iou_thresh,
                     fa=args.false_alarm_target,
-                    img_size=tuple(args.res_hw),
+                    img_size=eval_img_size,
                     to_save=str(metrics_json),
                     to_plot=False,
                     stats_path=stats_path,

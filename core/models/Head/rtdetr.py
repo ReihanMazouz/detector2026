@@ -217,10 +217,12 @@ class DeformableTransformerDecoder(nn.Module):
         pos_mlp,
         attn_mask=None,
         padding_mask=None,
+        return_states=False,
     ):
         output = target
         dec_bboxes = []
         dec_logits = []
+        dec_states = []
         last_refined_bbox = None
         for layer_index, layer in enumerate(self.layers):
             output = layer(
@@ -236,12 +238,14 @@ class DeformableTransformerDecoder(nn.Module):
             refined_bbox = torch.sigmoid(bbox_delta + inverse_sigmoid(reference_boxes))
 
             if self.training:
+                dec_states.append(output)
                 dec_logits.append(score_head[layer_index](output))
                 if layer_index == 0:
                     dec_bboxes.append(refined_bbox)
                 else:
                     dec_bboxes.append(torch.sigmoid(bbox_delta + inverse_sigmoid(last_refined_bbox)))
             elif layer_index == self.eval_idx:
+                dec_states.append(output)
                 dec_logits.append(score_head[layer_index](output))
                 dec_bboxes.append(refined_bbox)
                 break
@@ -249,6 +253,8 @@ class DeformableTransformerDecoder(nn.Module):
             last_refined_bbox = refined_bbox
             reference_boxes = refined_bbox.detach() if self.training else refined_bbox
 
+        if return_states:
+            return torch.stack(dec_bboxes), torch.stack(dec_logits), torch.stack(dec_states)
         return torch.stack(dec_bboxes), torch.stack(dec_logits)
 
 
@@ -422,7 +428,7 @@ class RTDETRHead(nn.Module):
 
         return query, top_boxes, enc_top_logits
 
-    def forward(self, *features, image_size=None):
+    def forward(self, *features, image_size=None, return_decoder_states=False):
         if len(features) == 1 and isinstance(features[0], (list, tuple)):
             features = tuple(features[0])
         if len(features) != self.nl:
@@ -441,7 +447,7 @@ class RTDETRHead(nn.Module):
         query, reference_boxes, enc_logits = self._get_decoder_input(memory, reference_boxes)
 
         if self.use_deformable_attention:
-            dec_boxes, dec_logits = self.decoder(
+            decoder_result = self.decoder(
                 query,
                 reference_boxes,
                 memory,
@@ -449,7 +455,12 @@ class RTDETRHead(nn.Module):
                 self.dec_bbox_head,
                 self.dec_score_head,
                 self.query_pos_head,
+                return_states=return_decoder_states,
             )
+            if return_decoder_states:
+                dec_boxes, dec_logits, dec_states = decoder_result
+            else:
+                dec_boxes, dec_logits = decoder_result
             outputs = [
                 {"pred_logits": layer_logits, "pred_boxes": layer_boxes}
                 for layer_boxes, layer_logits in zip(dec_boxes.unbind(0), dec_logits.unbind(0))
@@ -467,4 +478,9 @@ class RTDETRHead(nn.Module):
 
         final_output = outputs[-1]
         final_output["aux_outputs"] = [{"pred_logits": enc_logits, "pred_boxes": reference_boxes}, *outputs[:-1]]
+        if return_decoder_states:
+            if self.use_deformable_attention:
+                final_output["decoder_states"] = list(dec_states.unbind(0))
+            else:
+                final_output["decoder_states"] = []
         return final_output

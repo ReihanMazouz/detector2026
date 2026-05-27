@@ -426,32 +426,66 @@ image -> backbone YOLOv11n -> P3, P4, P5 -> Detect
 
 La loss reste la loss YOLO standard avec `TaskAlignedAssigner`. Cette ablation teste uniquement si le neck multi-échelle YOLO apporte un gain par rapport à des têtes appliquées directement sur les features backbone.
 
-### 3.5. No-Neck Avec Décodeurs Déformables Par Échelle
+### 3.5. No-Neck Avec Nouvelle Tête Déformable Par Échelle
 
-Cette ablation reprend `YOLOv11NoNeck` : le backbone YOLOv11n produit directement \(P_3, P_4, P_5\), sans neck FPN/PAN. La tête YOLO dense est remplacée par trois décodeurs déformables indépendants, spécialisés par taille d'objet :
+Cette ablation ne teste pas un nouveau neck : elle remplace la tête de détection. Le backbone `YOLOv11NoNeck` produit directement \(P_3, P_4, P_5\), sans FPN/PAN, puis une tête one-to-one déformable prédit les boîtes en trois étapes.
 
 ```text
-image -> backbone YOLOv11n -> P3, P4, P5
-P3 -> decoder petits objets  -> 64 queries
-P4 -> decoder objets moyens  -> 32 queries
-P5 -> decoder grands objets  -> 16 queries
+image -> backbone YOLOv11n no-neck -> P3, P4, P5
+
+étape 1 : têtes spécialisées par échelle
+P3 -> petits objets  -> 64 queries
+P4 -> objets moyens  -> 32 queries
+P5 -> grands objets  -> 16 queries
+
+étape 2 : fusion déformable inter-échelle
+queries P3/P4/P5 -> attention sur P3,P4,P5 -> boîtes sans contrainte de taille
+
+étape 3 : raffinement final
+queries fusionnées -> attention sur P3,P4,P5 -> boîtes finales
 ```
 
-Chaque décodeur contient trois couches successives d'attention déformable mono-niveau. À chaque couche, une query échantillonne `16` points dans la carte \(P_l\) correspondante :
+#### 3.5.1. Première Couche : Spécialisation Par Taille
+
+La première couche est contrainte par niveau. Les queries de \(P_3\) détectent les petits objets, celles de \(P_4\) les objets moyens, et celles de \(P_5\) les grands objets. L'assignation des objets aux niveaux suit l'échelle d'ancre ou le stride associé au niveau.
+
+Pour un niveau \(P_l\), la couche spécialisée applique une attention déformable mono-niveau :
 
 \[
-Q_l^{(t+1)} =
-\operatorname{DeformAttn}(Q_l^{(t)}, P_l, b_l^{(t)}, K=16)
+Q_l^{(1)} =
+\operatorname{DeformAttn}(Q_l^{(0)}, P_l, b_l^{(0)}, K=16)
 \]
 
-Les niveaux sont supervisés selon la taille de l'objet relativement à l'échelle d'ancre ou au stride : \(P_3\) pour les petits objets, \(P_4\) pour les moyens, \(P_5\) pour les grands. Les boîtes sont raffinées couche par couche :
+Cette première couche sert donc à initialiser des candidates cohérentes avec l'échelle spatiale du niveau.
+
+#### 3.5.2. Deuxième Couche : Fusion Sans Contrainte D'Échelle
+
+Les sorties spécialisées \(Q_3^{(1)}, Q_4^{(1)}, Q_5^{(1)}\) sont ensuite concaténées. La deuxième couche prend en entrée l'ensemble des queries précédentes et peut échantillonner dans les trois cartes \(P_3, P_4, P_5\).
 
 \[
-b_l^{(t+1)} =
-\sigma\left(\Delta b_l^{(t)} + \sigma^{-1}(b_l^{(t)})\right)
+Q^{(2)} =
+\operatorname{DeformAttn}(Q^{(1)}, \{P_3,P_4,P_5\}, b^{(1)}, K=16)
 \]
 
-La sortie finale concatène les prédictions des trois niveaux, soit `64 + 32 + 16 = 112` queries one-to-one. Cette variante teste une détection end-to-end spécialisée par échelle, sans neck et sans tête YOLO dense.
+À partir de cette couche, il n'y a plus de contrainte petit/moyen/grand : chaque query peut corriger sa boîte et sa classe en utilisant l'information multi-échelle.
+
+#### 3.5.3. Troisième Couche : Raffinement Final
+
+La dernière couche répète le mécanisme de raffinement sur les queries fusionnées :
+
+\[
+Q^{(3)} =
+\operatorname{DeformAttn}(Q^{(2)}, \{P_3,P_4,P_5\}, b^{(2)}, K=16)
+\]
+
+Les boîtes sont raffinées à chaque étape par :
+
+\[
+b^{(t+1)} =
+\sigma\left(\Delta b^{(t)} + \sigma^{-1}(b^{(t)})\right)
+\]
+
+La sortie finale contient `64 + 32 + 16 = 112` prédictions one-to-one. Cette ablation teste donc une nouvelle tête déformable spécialisée au départ par taille d'objet, puis libérée de cette contrainte grâce à deux couches de raffinement multi-échelle.
 
 ## 4. YOLOv11TransformerNeck
 
