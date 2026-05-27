@@ -15,6 +15,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 from detector2026.core.models.mr_yolo_ablation import (  # noqa: E402
     MRYOLOBranchCrossAttentionAblation,
     MRYOLOInputCrossAttentionAblation,
+    MRYOLOPatchSpatialAttentionAblation,
 )
 from detector2026.core.scripts.train_benchmark_suite import (  # noqa: E402
     DEFAULT_DATA_DIR,
@@ -47,6 +48,13 @@ DEFAULT_FUSION_NUM_POINTS = 4
 DEFAULT_FUSION_FFN_RATIO = 2.0
 DEFAULT_FUSION_DROPOUT = 0.0
 DEFAULT_INPUT_ENCODER_CHANNELS = 16
+DEFAULT_PATCH_D_MODEL = 128
+DEFAULT_PATCH_NUM_HEADS = 4
+DEFAULT_PATCH_NUM_LAYERS = 1
+DEFAULT_PATCH_NUM_POINTS = 16
+DEFAULT_PATCH_FFN_RATIO = 2.0
+DEFAULT_PATCH_DROPOUT = 0.0
+DEFAULT_PATCH_LATENT_GRID = (16, 16)
 
 
 @dataclass(frozen=True)
@@ -104,6 +112,28 @@ def build_jobs(args, input_resolutions: Sequence[tuple[int, int]], input_channel
                 **common_kwargs,
             ),
         ),
+        TrainingJob(
+            label="MRYOLOPatchSpatialAttentionAblation, x2",
+            output_dir_name="mr_yolo_patch_spatial_attention_x2",
+            model_builder=lambda output_dir: MRYOLOPatchSpatialAttentionAblation(
+                input_resolutions=list(input_resolutions),
+                output_dir=output_dir,
+                num_classes=args.num_classes,
+                reg_max=args.reg_max,
+                device=args.device,
+                in_ch=input_channels,
+                width_mult=args.width_mult,
+                outfusion_channels_mult=args.outfusion_channels_mult,
+                constant_backbone_ch=args.constant_backbone_ch,
+                patch_latent_grid_hw=tuple(args.patch_latent_grid),
+                patch_d_model=args.patch_d_model,
+                patch_num_heads=args.patch_num_heads,
+                patch_num_layers=args.patch_num_layers,
+                patch_num_points=args.patch_num_points,
+                patch_ffn_ratio=args.patch_ffn_ratio,
+                patch_dropout=args.patch_dropout,
+            ),
+        ),
     ]
 
 
@@ -139,8 +169,8 @@ def run_job(job: TrainingJob, args, output_dir_parent: Path) -> None:
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Run only the two requested MR-YOLO deformable ablations: "
-            "BranchCrossAttention and InputCrossAttention."
+            "Run MR-YOLO attention ablations: BranchCrossAttention, "
+            "InputCrossAttention and PatchSpatialAttention."
         )
     )
     parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
@@ -168,9 +198,24 @@ def parse_args():
     parser.add_argument("--fusion-ffn-ratio", type=float, default=DEFAULT_FUSION_FFN_RATIO)
     parser.add_argument("--fusion-dropout", type=float, default=DEFAULT_FUSION_DROPOUT)
     parser.add_argument("--input-encoder-channels", type=int, default=DEFAULT_INPUT_ENCODER_CHANNELS)
+    parser.add_argument("--patch-d-model", type=int, default=DEFAULT_PATCH_D_MODEL)
+    parser.add_argument("--patch-num-heads", type=int, default=DEFAULT_PATCH_NUM_HEADS)
+    parser.add_argument("--patch-num-layers", type=int, default=DEFAULT_PATCH_NUM_LAYERS)
+    parser.add_argument("--patch-num-points", type=int, default=DEFAULT_PATCH_NUM_POINTS)
+    parser.add_argument("--patch-ffn-ratio", type=float, default=DEFAULT_PATCH_FFN_RATIO)
+    parser.add_argument("--patch-dropout", type=float, default=DEFAULT_PATCH_DROPOUT)
+    parser.add_argument(
+        "--patch-latent-grid",
+        type=lambda value: tuple(int(part) for part in value.lower().replace("x", ",").split(",")),
+        default=DEFAULT_PATCH_LATENT_GRID,
+        help="Latent token grid for patch spatial attention, formatted as H,W or HxW.",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Run even if best.pt/last.pt already exists.")
-    parser.add_argument("--dry-run", action="store_true", help="List the two planned jobs without training.")
-    return parser.parse_args()
+    parser.add_argument("--dry-run", action="store_true", help="List the planned jobs without training.")
+    args = parser.parse_args()
+    if len(args.patch_latent_grid) != 2:
+        raise ValueError("--patch-latent-grid must contain exactly two integers.")
+    return args
 
 
 def main() -> None:

@@ -352,7 +352,9 @@ i_q =
 \right)
 \]
 
-La tête utilise une attention déformable mono-niveau. Comme il n'y a qu'un seul niveau \(P_3\), \(L=1\), et la cross-attention devient :
+La tête utilise une attention déformable mono-niveau au sens des cartes mémoire : le decoder ne voit que \(P_3\), donc `num_levels=1`. Cela ne signifie pas une seule couche de decoder. Dans le script, `num_decoder_layers=6` par défaut ; ces couches s'enchaînent avec raffinement itératif des boîtes.
+
+Pour une couche de decoder donnée, la cross-attention devient :
 
 \[
 \operatorname{MSDeformAttn}(q_i)
@@ -370,6 +372,14 @@ où :
 - \(\Delta p_{i,k}\) est l'offset appris du point \(k\) ;
 - \(a_{i,k}\) est le poids d'attention appris ;
 - \(V_3\) est la carte de valeurs issue de \(P_3\).
+
+À chaque couche \(l\), la boîte est raffinée par :
+
+\[
+b_l = \sigma\left(\Delta b_l + \sigma^{-1}(b_{l-1})\right)
+\]
+
+En entraînement, la couche suivante utilise bien \(b_l\) comme nouvelle référence, avec un `detach` sur ces coordonnées.
 
 Cette expérience mesure la capacité d'une tête RT-DETR à exploiter des features P3 déjà apprises, sans modifier l'extracteur.
 
@@ -617,7 +627,43 @@ mlp_ratio = 4.0
 
 **`YOLOv11DATBackbone`** utilise le DAT (*Deformable Attention Transformer*, Xia et al., 2022) : les blocs alternent attention locale par fenêtres (pairs) et attention déformable (impairs). Dans les blocs déformables, chaque token peut observer \(r^2\) positions adaptatives apprises sur l'ensemble de la feature map, sans contrainte de localité. Le coût est \(\mathcal{O}(HW \cdot r^2 \cdot d)\) avec \(r=7\). Voir [Xia et al., arXiv:2201.00520](https://arxiv.org/abs/2201.00520).
 
-## 6. Coûts Des Modèles
+## 6. YOLOv11n Backbone P2-P5 Direct Heads
+
+Cette ablation supprime le neck et expose directement les niveaux \(P_2, P_3, P_4, P_5\) du backbone YOLOv11n. Elle évite \(P_1\), trop dense en points candidats, et force \(P_2\) à porter la détection des petits objets.
+
+### 6.1. One2Many TAL Sur P2-P5
+
+Le premier modèle, entraîné sur `cuda:1`, applique une tête YOLO one-to-many sur \(P_2, P_3, P_4, P_5\) :
+
+```text
+image -> YOLOv11n backbone tronqué -> P2, P3, P4, P5 -> Detect(P2..P5)
+```
+
+La loss reste la loss YOLO standard avec `TaskAlignedAssigner`, classification, régression box et DFL. \(P_2\) reçoit explicitement les petits objets afin d'éviter que les niveaux plus profonds dominent l'assignation. Il n'y a pas de neck FPN/PAN : cette variante mesure la valeur brute des niveaux backbone pour une détection dense multi-échelle.
+
+### 6.2. One2One RT-DETR Sur P2-P5
+
+Le second modèle, entraîné sur `cuda:0`, reprend le backbone du modèle 6.1, supprime les têtes one-to-many et les remplace par des têtes one-to-one RT-DETR :
+
+```text
+image -> YOLOv11n backbone tronqué -> P2, P3, P4, P5
+      -> têtes deformable attention par niveau
+      -> decoder deformable final multi-level
+      -> classes + boîtes finales
+```
+
+Chaque \(P_i\) est projeté vers une dimension commune, puis traité par une tête d'attention déformable propre au niveau. Le budget de queries dépend de l'échelle :
+
+```text
+P2 : 80 boîtes
+P3 : 40 boîtes
+P4 : 20 boîtes
+P5 : 10 boîtes
+```
+
+Une dernière couche d'attention déformable agrège les sorties des têtes par niveau pour produire les boîtes finales. L'entraînement utilise un matching Hungarian one-to-one avec loss classification, L1 box et GIoU, sans `TaskAlignedAssigner` ni NMS imposé.
+
+## 7. Coûts Des Modèles
 
 Les coûts ci-dessous sont calculés avec `core/scripts/report_model_costs.py`. Les MACs corrigées ajoutent les opérations d'attention que `thop` ne compte pas correctement : attention spatiale YOLO, self-attention transformer, attention déformable RT-DETR et encodeur du `TransformerPyramidNeck`.
 
@@ -635,9 +681,13 @@ Les coûts ci-dessous sont calculés avec `core/scripts/report_model_costs.py`. 
 | YOLOv11_Deformable_Neck | 1x1x256x256 | 3.12M | 699.86M | 1.40G | 3.70M |
 | YOLOv11_Swin_Backbone | 1x1x256x256 | 6.10M | 3.28G | 6.56G | 142.61M |
 | YOLOv11_DAT_Backbone | 1x1x256x256 | — | — | — | — |
+| YOLOv11_P2P5_One2Many | 1x1x256x256 | 2.28M | 1.14G | 2.28G | 0 |
+| YOLOv11_P2P5_RTDETR_One2One | 1x1x256x256 | 10.28M | 1.23G | 2.46G | 6.14M |
+
+Pour `YOLOv11_P2P5_RTDETR_One2One`, la mesure utilise les budgets \(80/40/20/10\), 6 couches d'attention déformable par niveau et 1 couche finale déformable multi-niveau.
 
 
-## 7. Sources
+## 8. Sources
 
 - DEYO, implémentation officielle : https://github.com/ouyanghaodong/DEYO  
   Référence utilisée pour l'architecture `RTDETRDecoder`, le transfert depuis un modèle YOLO, le choix `nc` sans classe `no-object`, la varifocal loss, le decoder à raffinement itératif et la configuration d'entraînement.

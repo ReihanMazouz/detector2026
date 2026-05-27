@@ -240,6 +240,83 @@ Cette variante teste si la communication entre resolutions doit intervenir avant
 Par defaut, cette architecture doit etre instanciee en mode `deformable`.
 Le mode `global` reste disponible dans la classe pour des tests controles, mais il ne doit pas etre inclus dans les scripts de baseline : son cout memoire est prohibitif sur les spectres d'entree haute resolution.
 
+## Architecture 3 : patch spatial attention multi-resolution
+
+`MRPatchSpatialAttentionBlock` est l'ablation transformer retenue pour la suite. Les patches ne remplacent pas le backbone et ne produisent pas une pyramide. Ils servent a calculer une carte d'attention spatiale, appliquee ensuite sur les pixels/features d'entree du bloc.
+
+Le bloc prend une liste de feature maps multi-resolution :
+
+```math
+F^{(r)} \in \mathbb{R}^{B \times C_r \times T_r \times F_r}.
+```
+
+### Patching latent aligne
+
+Chaque feature map est patchifiee avec une taille anisotrope propre a sa resolution :
+
+```math
+Z^{(r)} = \mathrm{PatchEmbed}_r(F^{(r)}),
+\qquad
+Z^{(r)} \in \mathbb{R}^{B \times N \times d}.
+```
+
+Les tailles de patch sont choisies pour que toutes les resolutions produisent la meme grille latente :
+
+```math
+\frac{T_r}{p_{t,r}} = H_*,
+\qquad
+\frac{F_r}{p_{f,r}} = W_*.
+```
+
+Chaque token recoit un embedding de position partage et un embedding de resolution.
+
+### Attention intra/inter-resolution
+
+Le bloc applique d'abord une attention deformable intra-resolution :
+
+```math
+\tilde{Z}^{(r)} = \mathrm{DefSelfAttn}(Z^{(r)}).
+```
+
+Puis, pour chaque position latente `p`, il applique une attention uniquement entre les resolutions correspondantes :
+
+```math
+\bar{S}(p) =
+\mathrm{MHSA}_{\mathrm{res}}
+\left(
+[\tilde{Z}^{(1)}(p), \ldots, \tilde{Z}^{(R)}(p)]
+\right).
+```
+
+Il n'y a pas d'attention globale entre toutes les positions et toutes les resolutions.
+
+### Attention par pixel
+
+Les tokens mis a jour ne sont pas reconstruits en feature map dense. Ils produisent une carte d'attention spatiale basse resolution :
+
+```math
+a^{(r)} = \mathrm{Linear}(\bar{Z}^{(r)}),
+\qquad
+a^{(r)} \in \mathbb{R}^{B \times 1 \times H_* \times W_*}.
+```
+
+Cette carte est interpolee vers la taille de la feature map d'entree :
+
+```math
+A^{(r)} = \mathrm{Upsample}(a^{(r)}, T_r, F_r).
+```
+
+La sortie est une modulation residuelle pixel-wise :
+
+```math
+F_{out}^{(r)} =
+F^{(r)} + \alpha_r \left(2\sigma(A^{(r)}) - 1\right) \odot F^{(r)}.
+```
+
+`alpha_r` est appris et initialise a zero afin que le bloc commence comme une identite.
+
+Le bloc teste donc une hypothese ciblee : est-ce qu'une attention latente multi-resolution, calculee sur patches alignes, peut recalibrer spatialement les features convolutionnelles ?
+
 ## Complexite des ablations
 
 Les couts ci-dessous sont calcules pour une entree batch 1 avec les 5 resolutions :
@@ -262,6 +339,7 @@ Configuration commune :
 | `MRYOLOBranchCrossAttentionAblation`, `deformable` | `n`, `BranchBackbone` par resolution, fusion apres branches, `d=128`, 4 tetes, 1 couche, 4 points par resolution | 4.94M | 6.42G | 12.83G | 10.49M |
 | `MRYOLOInputCrossAttentionAblation`, `global` | fusion avant backbone, encodeur entree `Conv`, `encoder_channels=16`, puis YOLOv11n, `d=128`, 4 tetes, 1 couche, attention globale dense | 3.78M | 5.87T | 11.74T | 5.85T |
 | `MRYOLOInputCrossAttentionAblation`, `deformable` | fusion avant backbone, encodeur entree `Conv`, `encoder_channels=16`, puis YOLOv11n, `d=128`, 4 tetes, 1 couche, 4 points par resolution | 3.78M | 14.63G | 29.27G | 169.41M |
+| `MR_YOLO + MRPatchSpatialAttentionBlock x2` | MR-YOLO complet avec deux blocs de recalibration spatiale appliques entre `P1->P2` et `P2->P3`, grille latente `16x16`, `d=128`, 4 tetes, 1 couche, 16 points deformables | 7.34M | 6.87G | 13.74G | 352.99M |
 
 Lecture du tableau :
 
@@ -279,7 +357,31 @@ ou \(N_q\) est le nombre de queries de la resolution centrale, \(N_m\) le nombre
 
 ou \(R\) est le nombre de resolutions et \(K\) le nombre de points echantillonnes par resolution.
 
+Pour `MRPatchSpatialAttentionBlock`, le cout d'attention est la somme de deux termes dans la grille latente :
+
+```math
+\mathcal{O}
+\left(
+R N K d
+\right)
++
+\mathcal{O}
+\left(
+N R^2 d
+\right).
+```
+
+Le premier terme correspond a l'attention deformable intra-resolution. Le second correspond a l'attention inter-resolution alignee, appliquee uniquement entre les \(R\) tokens representant la meme position physique. La ligne `MR_YOLO + MRPatchSpatialAttentionBlock x2` mesure le modele MR-YOLO complet augmente avec deux insertions : une sur les features `P1` des branches, puis une sur les features `P2`. Les features mesurees sont :
+
+```text
+P1 : (64x256), (128x256), (128x128), (256x128), (256x64)
+P2 : (64x128), (128x128), (64x64),  (128x128), (128x64)
+```
+
+La mesure complete combine les MACs `thop` (`6.52G`) et les MACs d'attention non comptees automatiquement (`352.99M`). Le cout des deux blocs seuls est `1.35G` MACs corrigees ; le modele complet avec branches, fusion, P4/P5, neck et tete vaut `6.87G` MACs corrigees.
+
 - `BranchCrossAttention global` sert de reference haute : l'attention est appliquee apres les `BranchBackbone`, donc les cartes sont deja reduites, mais chaque token central regarde encore tous les tokens issus des cinq branches. Le cout monte a `29.51G` MACs, principalement a cause des `23.62G` MACs d'attention dense.
 - `BranchCrossAttention deformable` garde les memes parametres que le mode global, mais remplace la matrice dense par \(R \times K = 5 \times 4\) points par query. Le cout descend a `6.42G` MACs : l'essentiel du cout vient alors du backbone/neck convolutionnel, plus de l'attention.
 - `InputCrossAttention global` est pratiquement prohibitif : sur les spectres d'entree, la grille centrale contient \(65\,536\) queries et les cinq resolutions fournissent \(327\,680\) tokens memoire. Le produit \(N_qN_m\) explique les `5.85T` MACs d'attention ajoutees.
 - `InputCrossAttention deformable` reste plus couteux que la fusion apres branches, car il travaille avant reduction profonde de resolution. En revanche, il evite le resize destructif et limite la fusion a \(65\,536 \times 5 \times 4\) echantillons, ce qui ramene le cout a `14.63G` MACs au lieu de plusieurs tera-MACs.
+- `MR_YOLO + MRPatchSpatialAttentionBlock x2` est logiquement plus couteux que `MR_YOLO baseline`, car il ajoute deux blocs d'attention latente au modele complet. Le surcout reste nettement inferieur a la variante `patch/unpatch` a trois niveaux, car les tokens ne reconstruisent pas les cartes denses : ils produisent une carte d'attention spatiale partagee sur les canaux.
