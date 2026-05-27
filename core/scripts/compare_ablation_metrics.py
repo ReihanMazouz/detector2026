@@ -7,6 +7,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -128,6 +129,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--include-missing", action="store_true", help="Keep missing checkpoints as NaN rows.")
     parser.add_argument("--max-models", type=int, default=0, help="Debug limit. 0 evaluates all specs.")
+    parser.add_argument(
+        "--save-full-stats",
+        action="store_true",
+        help="Persist raw TP/FP/FN stats. Disabled by default because files can be hundreds of MB per model.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -200,6 +206,9 @@ def summarize_metrics(
     args: argparse.Namespace,
 ) -> dict[str, float]:
     map_stats = full_metrics.get("map_stats", {})
+    model_info = full_metrics.get("model_info", {})
+    params = model_info.get("params", float("nan"))
+    macs = model_info.get("flops", float("nan"))
     recall_snr = full_metrics.get("recall_snr", {}).get("global", {})
     snr_bins = recall_snr.get("snr_bins")
     recall_curve = recall_snr.get("recall")
@@ -209,6 +218,9 @@ def summarize_metrics(
     return {
         "map50": float(map_stats.get("mAP50", float("nan"))),
         "map50_95": float(map_stats.get("mAP50:95", float("nan"))),
+        "params": float(params) if params is not None else float("nan"),
+        "macs": float(macs) if macs is not None else float("nan"),
+        "flops": float(2 * macs) if macs is not None else float("nan"),
         "conf_thresh": conf_thresh,
         "recall_low_snr": avg_recall_between(snr_bins, recall_curve, *args.low_snr)
         if snr_bins is not None else float("nan"),
@@ -220,6 +232,46 @@ def summarize_metrics(
         "recall_medium": recall_for_size_band(stats, conf_thresh, small_max, medium_max),
         "recall_large": recall_for_size_band(stats, conf_thresh, medium_max, None),
     }
+
+
+def sanitize_filename(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in value)
+
+
+def compact_curve_payload(full_metrics: dict[str, Any], summary: dict[str, float]) -> dict[str, Any]:
+    f1_stats = full_metrics.get("f1_stats", {})
+    recall_snr = full_metrics.get("recall_snr", {}).get("global", {})
+    map_stats = full_metrics.get("map_stats", {})
+    model_info = full_metrics.get("model_info", {})
+    operating_point = full_metrics.get("operating_point", {})
+    return {
+        "summary": summary,
+        "map_stats": map_stats,
+        "model_info": model_info,
+        "operating_point": operating_point,
+        "confidence_threshold": full_metrics.get("conf_thresh"),
+        "precision_recall": {
+            "threshold": f1_stats.get("thr", []),
+            "recall": f1_stats.get("recall", []),
+            "precision": f1_stats.get("precision", []),
+            "f1": f1_stats.get("f1", []),
+        },
+        "recall_snr": {
+            "snr_bins": recall_snr.get("snr_bins", []),
+            "recall": recall_snr.get("recall", []),
+        },
+    }
+
+
+def save_compact_curve_payload(
+    full_metrics: dict[str, Any],
+    summary: dict[str, float],
+    path: Path,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = compact_curve_payload(full_metrics, summary)
+    path.write_text(json.dumps(payload, indent=2, default=json_default), encoding="utf-8")
+    return path
 
 
 def make_specific_loader(args: argparse.Namespace) -> DataLoader:
@@ -573,28 +625,49 @@ def evaluate_one(
         load_checkpoint(model, spec.checkpoint, args.device)
         model.eval()
         metrics_json = output_dir / "json" / f"{spec.name}.json"
-        stats_json = output_dir / "stats" / f"{spec.name}.json"
-        full_metrics = dataset_analysis_with_metrics(
-            model=model,
-            val_loader=loader,
-            iou_thresh=args.iou_thresh,
-            fa=args.false_alarm_target,
-            img_size=tuple(args.res_hw),
-            to_save=str(metrics_json),
-            to_plot=False,
-            stats_path=stats_json,
-            class_index_to_name=class_index_to_name,
-        )
-        with open(stats_json, "r", encoding="utf-8") as handle:
-            stats = json.load(handle)
+        compact_stats_json = output_dir / "stats_compact" / f"{spec.name}.json"
+        full_stats_json = output_dir / "stats_full" / f"{spec.name}.json"
+        if args.save_full_stats:
+            stats_path = full_stats_json
+            full_metrics = dataset_analysis_with_metrics(
+                model=model,
+                val_loader=loader,
+                iou_thresh=args.iou_thresh,
+                fa=args.false_alarm_target,
+                img_size=tuple(args.res_hw),
+                to_save=str(metrics_json),
+                to_plot=False,
+                stats_path=stats_path,
+                class_index_to_name=class_index_to_name,
+            )
+            with open(stats_path, "r", encoding="utf-8") as handle:
+                stats = json.load(handle)
+        else:
+            with tempfile.TemporaryDirectory(prefix="ablation_stats_") as tmp_dir:
+                stats_path = Path(tmp_dir) / f"{spec.name}.json"
+                full_metrics = dataset_analysis_with_metrics(
+                    model=model,
+                    val_loader=loader,
+                    iou_thresh=args.iou_thresh,
+                    fa=args.false_alarm_target,
+                    img_size=tuple(args.res_hw),
+                    to_save=str(metrics_json),
+                    to_plot=False,
+                    stats_path=stats_path,
+                    class_index_to_name=class_index_to_name,
+                )
+                with open(stats_path, "r", encoding="utf-8") as handle:
+                    stats = json.load(handle)
         row = summarize_metrics(full_metrics, stats, args)
+        save_compact_curve_payload(full_metrics, row, compact_stats_json)
         row.update(
             {
                 "model": spec.name,
                 "family": spec.family,
                 "checkpoint": str(spec.checkpoint),
                 "metrics_json": str(metrics_json),
-                "stats_json": str(stats_json),
+                "compact_stats_json": str(compact_stats_json),
+                "full_stats_json": str(full_stats_json) if args.save_full_stats else "",
                 "status": "ok",
             }
         )
@@ -612,6 +685,9 @@ def write_csv(rows: list[dict[str, Any]], csv_path: Path) -> None:
         "status",
         "map50",
         "map50_95",
+        "params",
+        "macs",
+        "flops",
         "recall_low_snr",
         "recall_medium_snr",
         "recall_high_snr",
@@ -621,7 +697,8 @@ def write_csv(rows: list[dict[str, Any]], csv_path: Path) -> None:
         "conf_thresh",
         "checkpoint",
         "metrics_json",
-        "stats_json",
+        "compact_stats_json",
+        "full_stats_json",
     ]
     with open(csv_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -669,6 +746,143 @@ def plot_bars(rows: list[dict[str, Any]], output_dir: Path) -> None:
         ax.grid(axis="x", linestyle="--", alpha=0.35)
         fig.tight_layout()
         fig.savefig(plots_dir / f"{key}.png", dpi=200)
+        plt.close(fig)
+
+
+def _load_compact_payload(row: dict[str, Any]) -> dict[str, Any] | None:
+    path = row.get("compact_stats_json")
+    if not path:
+        return None
+    path = Path(path)
+    if not path.is_file():
+        return None
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _snr_centers(snr_bins: Sequence[float]) -> np.ndarray:
+    bins = np.asarray(snr_bins, dtype=float)
+    if len(bins) < 2:
+        return np.asarray([], dtype=float)
+    return 0.5 * (bins[:-1] + bins[1:])
+
+
+def plot_curves(rows: list[dict[str, Any]], output_dir: Path) -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        print(f"[WARN] matplotlib indisponible, courbes non générées: {exc}")
+        return
+
+    ok_rows = [row for row in rows if row.get("status") == "ok"]
+    if not ok_rows:
+        return
+
+    curves_dir = output_dir / "plots" / "curves"
+    curves_dir.mkdir(parents=True, exist_ok=True)
+    aggregate_snr = []
+    aggregate_pr = []
+
+    for row in ok_rows:
+        payload = _load_compact_payload(row)
+        if payload is None:
+            continue
+        model_name = row["model"]
+        stem = sanitize_filename(model_name)
+        pr = payload.get("precision_recall", {})
+        recall = np.asarray(pr.get("recall", []), dtype=float)
+        precision = np.asarray(pr.get("precision", []), dtype=float)
+        f1 = np.asarray(pr.get("f1", []), dtype=float)
+        thresholds = np.asarray(pr.get("threshold", []), dtype=float)
+        snr = payload.get("recall_snr", {})
+        snr_bins = snr.get("snr_bins", [])
+        snr_recall = np.asarray(snr.get("recall", []), dtype=float)
+        snr_centers = _snr_centers(snr_bins)
+
+        if len(recall) and len(precision):
+            fig, ax = plt.subplots(figsize=(6, 5))
+            ax.plot(recall, precision, linewidth=2.0)
+            ax.set_xlabel("Recall")
+            ax.set_ylabel("Precision")
+            ax.set_title(f"Precision-Recall - {model_name}")
+            ax.set_xlim(0.0, 1.0)
+            ax.set_ylim(0.0, 1.0)
+            ax.grid(True, linestyle="--", alpha=0.35)
+            fig.tight_layout()
+            fig.savefig(curves_dir / f"{stem}_precision_recall.png", dpi=200)
+            plt.close(fig)
+            aggregate_pr.append((model_name, recall, precision))
+
+        if len(thresholds) and len(recall) and len(precision):
+            fig, ax = plt.subplots(figsize=(7, 5))
+            ax.plot(thresholds, recall, label="Recall", linewidth=2.0)
+            ax.plot(thresholds, precision, label="Precision", linewidth=2.0)
+            ax.set_xlabel("Confidence threshold")
+            ax.set_ylabel("Score")
+            ax.set_title(f"Precision/Recall vs threshold - {model_name}")
+            ax.set_xlim(0.0, 1.0)
+            ax.set_ylim(0.0, 1.0)
+            ax.grid(True, linestyle="--", alpha=0.35)
+            ax.legend()
+            fig.tight_layout()
+            fig.savefig(curves_dir / f"{stem}_precision_recall_threshold.png", dpi=200)
+            plt.close(fig)
+
+        if len(thresholds) and len(f1):
+            fig, ax = plt.subplots(figsize=(7, 5))
+            ax.plot(thresholds, f1, color="#2CA02C", linewidth=2.0)
+            ax.set_xlabel("Confidence threshold")
+            ax.set_ylabel("F1-score")
+            ax.set_title(f"F1-score vs threshold - {model_name}")
+            ax.set_xlim(0.0, 1.0)
+            ax.set_ylim(0.0, 1.0)
+            ax.grid(True, linestyle="--", alpha=0.35)
+            fig.tight_layout()
+            fig.savefig(curves_dir / f"{stem}_f1_threshold.png", dpi=200)
+            plt.close(fig)
+
+        if len(snr_centers) and len(snr_recall):
+            fig, ax = plt.subplots(figsize=(7, 5))
+            ax.plot(snr_centers, snr_recall, marker="o", linewidth=2.0)
+            ax.set_xlabel("SNR (dB)")
+            ax.set_ylabel("Recall")
+            ax.set_title(f"Recall vs SNR - {model_name}")
+            ax.set_ylim(0.0, 1.0)
+            ax.grid(True, linestyle="--", alpha=0.35)
+            fig.tight_layout()
+            fig.savefig(curves_dir / f"{stem}_recall_snr.png", dpi=200)
+            plt.close(fig)
+            aggregate_snr.append((model_name, snr_centers, snr_recall))
+
+    if aggregate_snr:
+        fig_height = max(5.0, min(12.0, 0.28 * len(aggregate_snr) + 4.0))
+        fig, ax = plt.subplots(figsize=(10, fig_height))
+        for model_name, x, y in aggregate_snr:
+            ax.plot(x, y, marker="o", linewidth=1.6, label=model_name)
+        ax.set_xlabel("SNR (dB)")
+        ax.set_ylabel("Recall")
+        ax.set_title("Recall vs SNR")
+        ax.set_ylim(0.0, 1.0)
+        ax.grid(True, linestyle="--", alpha=0.35)
+        ax.legend(fontsize=7, ncol=1, loc="center left", bbox_to_anchor=(1.0, 0.5))
+        fig.tight_layout()
+        fig.savefig(curves_dir / "compare_recall_snr.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
+
+    if aggregate_pr:
+        fig_height = max(5.0, min(12.0, 0.28 * len(aggregate_pr) + 4.0))
+        fig, ax = plt.subplots(figsize=(10, fig_height))
+        for model_name, x, y in aggregate_pr:
+            ax.plot(x, y, linewidth=1.6, label=model_name)
+        ax.set_xlabel("Recall")
+        ax.set_ylabel("Precision")
+        ax.set_title("Precision-Recall")
+        ax.set_xlim(0.0, 1.0)
+        ax.set_ylim(0.0, 1.0)
+        ax.grid(True, linestyle="--", alpha=0.35)
+        ax.legend(fontsize=7, ncol=1, loc="center left", bbox_to_anchor=(1.0, 0.5))
+        fig.tight_layout()
+        fig.savefig(curves_dir / "compare_precision_recall.png", dpi=200, bbox_inches="tight")
         plt.close(fig)
 
 
@@ -735,6 +949,7 @@ def main() -> None:
     csv_path = output_dir / "ablation_fine_metrics.csv"
     write_csv(rows, csv_path)
     plot_bars(rows, output_dir)
+    plot_curves(rows, output_dir)
     summary_path = output_dir / "ablation_fine_metrics.json"
     summary_path.write_text(json.dumps(rows, indent=2, default=json_default), encoding="utf-8")
 
