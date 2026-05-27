@@ -13,8 +13,6 @@ import torch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from detector2026.core.models.mr_yolo_ablation import (  # noqa: E402
-    MRYOLOBranchCrossAttentionAblation,
-    MRYOLOInputCrossAttentionAblation,
     MRYOLOPatchSpatialAttentionAblation,
 )
 from detector2026.core.scripts.train_benchmark_suite import (  # noqa: E402
@@ -41,13 +39,6 @@ DEFAULT_FULL_EVAL_EVERY = 5
 DEFAULT_SAVE_LAST_EVERY = 5
 DEFAULT_MONITOR = "val_loss"
 DEFAULT_WIDTH_MULT = 0.25
-DEFAULT_FUSION_D_MODEL = 128
-DEFAULT_FUSION_NUM_HEADS = 4
-DEFAULT_FUSION_NUM_LAYERS = 1
-DEFAULT_FUSION_NUM_POINTS = 4
-DEFAULT_FUSION_FFN_RATIO = 2.0
-DEFAULT_FUSION_DROPOUT = 0.0
-DEFAULT_INPUT_ENCODER_CHANNELS = 16
 DEFAULT_PATCH_D_MODEL = 128
 DEFAULT_PATCH_NUM_HEADS = 4
 DEFAULT_PATCH_NUM_LAYERS = 1
@@ -75,43 +66,7 @@ def cleanup_after_run() -> None:
 
 
 def build_jobs(args, input_resolutions: Sequence[tuple[int, int]], input_channels: int) -> list[TrainingJob]:
-    common_kwargs = dict(
-        input_resolutions=list(input_resolutions),
-        num_classes=args.num_classes,
-        reg_max=args.reg_max,
-        device=args.device,
-        in_ch=input_channels,
-        width_mult=args.width_mult,
-        fusion_mode="deformable",
-        center_resolution_index=args.center_resolution_index,
-        fusion_d_model=args.fusion_d_model,
-        fusion_num_heads=args.fusion_num_heads,
-        fusion_num_layers=args.fusion_num_layers,
-        fusion_num_points=args.fusion_num_points,
-        fusion_ffn_ratio=args.fusion_ffn_ratio,
-        fusion_dropout=args.fusion_dropout,
-    )
-
     return [
-        TrainingJob(
-            label="MRYOLOBranchCrossAttentionAblation, deformable",
-            output_dir_name="mr_yolo_branch_cross_attention_deformable",
-            model_builder=lambda output_dir: MRYOLOBranchCrossAttentionAblation(
-                output_dir=output_dir,
-                outfusion_channels_mult=args.outfusion_channels_mult,
-                constant_backbone_ch=args.constant_backbone_ch,
-                **common_kwargs,
-            ),
-        ),
-        TrainingJob(
-            label="MRYOLOInputCrossAttentionAblation, deformable",
-            output_dir_name="mr_yolo_input_cross_attention_deformable",
-            model_builder=lambda output_dir: MRYOLOInputCrossAttentionAblation(
-                output_dir=output_dir,
-                encoder_channels=args.input_encoder_channels,
-                **common_kwargs,
-            ),
-        ),
         TrainingJob(
             label="MRYOLOPatchSpatialAttentionAblation, x2",
             output_dir_name="mr_yolo_patch_spatial_attention_x2",
@@ -168,10 +123,7 @@ def run_job(job: TrainingJob, args, output_dir_parent: Path) -> None:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description=(
-            "Run MR-YOLO attention ablations: BranchCrossAttention, "
-            "InputCrossAttention and PatchSpatialAttention."
-        )
+        description="Run the MR-YOLO PatchSpatialAttention ablation only."
     )
     parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     parser.add_argument("--output-dir-parent", default=DEFAULT_OUTPUT_DIR_PARENT)
@@ -190,14 +142,6 @@ def parse_args():
     parser.add_argument("--width-mult", type=float, default=DEFAULT_WIDTH_MULT)
     parser.add_argument("--outfusion-channels-mult", type=int, default=2)
     parser.add_argument("--constant-backbone-ch", type=int, default=0)
-    parser.add_argument("--center-resolution-index", type=int, default=0)
-    parser.add_argument("--fusion-d-model", type=int, default=DEFAULT_FUSION_D_MODEL)
-    parser.add_argument("--fusion-num-heads", type=int, default=DEFAULT_FUSION_NUM_HEADS)
-    parser.add_argument("--fusion-num-layers", type=int, default=DEFAULT_FUSION_NUM_LAYERS)
-    parser.add_argument("--fusion-num-points", type=int, default=DEFAULT_FUSION_NUM_POINTS)
-    parser.add_argument("--fusion-ffn-ratio", type=float, default=DEFAULT_FUSION_FFN_RATIO)
-    parser.add_argument("--fusion-dropout", type=float, default=DEFAULT_FUSION_DROPOUT)
-    parser.add_argument("--input-encoder-channels", type=int, default=DEFAULT_INPUT_ENCODER_CHANNELS)
     parser.add_argument("--patch-d-model", type=int, default=DEFAULT_PATCH_D_MODEL)
     parser.add_argument("--patch-num-heads", type=int, default=DEFAULT_PATCH_NUM_HEADS)
     parser.add_argument("--patch-num-layers", type=int, default=DEFAULT_PATCH_NUM_LAYERS)
@@ -229,19 +173,12 @@ def main() -> None:
             "Mismatch between dataset resolutions and DEFAULT_RES_KEYS: "
             f"{len(input_resolutions)} resolutions for {len(DEFAULT_RES_KEYS)} keys."
         )
-    if not 0 <= int(args.center_resolution_index) < len(input_resolutions):
-        raise ValueError(
-            f"--center-resolution-index must be in [0, {len(input_resolutions) - 1}], "
-            f"got {args.center_resolution_index}."
-        )
-
     input_channels = preprocessing_num_channels(args.preprocessing)
     jobs = build_jobs(args, input_resolutions, input_channels)
 
     print("Resolutions utilisees:")
     for index, (res_key, res_hw) in enumerate(zip(DEFAULT_RES_KEYS, input_resolutions)):
-        marker = " (centre)" if index == args.center_resolution_index else ""
-        print(f"  {index}. {res_key}: {res_hw}{marker}")
+        print(f"  {index}. {res_key}: {res_hw}")
     print(f"Preprocessing = {args.preprocessing}")
     print(f"Input channels = {input_channels}")
     print(f"Device = {args.device}")

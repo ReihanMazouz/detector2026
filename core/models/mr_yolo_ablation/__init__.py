@@ -1,3 +1,4 @@
+from .mr_vit_patch_detector import MRViTPatchDetector
 from .branch_cross_attention import (
     BranchCrossAttentionBackbone,
     MRYOLOBranchCrossAttentionAblation,
@@ -20,4 +21,5 @@ __all__ = [
     "MRYOLOBranchCrossAttentionAblation",
     "MRYOLOInputCrossAttentionAblation",
     "PatchSpatialAttentionBackbone",
+    "MRViTPatchDetector",
 ]
