@@ -1,4 +1,8 @@
 from .mr_vit_patch_detector import MRViTPatchDetector
+from .mr_patch_backbone_yolo_one2many_head import (
+    IsotropicRestrictedPatchBackbone,
+    MRPatchBackboneYOLOOne2ManyHead,
+)
 from .branch_cross_attention import (
     BranchCrossAttentionBackbone,
     MRYOLOBranchCrossAttentionAblation,
@@ -17,9 +21,11 @@ __all__ = [
     "InterResolutionCrossAttentionFusion",
     "MRDeformableSpectralTransformerP3",
     "MRPatchSpatialAttentionBlock",
+    "MRPatchBackboneYOLOOne2ManyHead",
     "MRYOLOPatchSpatialAttentionAblation",
     "MRYOLOBranchCrossAttentionAblation",
     "MRYOLOInputCrossAttentionAblation",
     "PatchSpatialAttentionBackbone",
     "MRViTPatchDetector",
+    "IsotropicRestrictedPatchBackbone",
 ]
