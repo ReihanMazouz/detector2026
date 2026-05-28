@@ -43,9 +43,17 @@ class RestrictedInterResolutionAttention(nn.Module):
 
     def __init__(self, d_model: int, num_heads: int, num_neighbors: int, dropout: float):
         super().__init__()
+        if d_model % num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads.")
+        self.d_model = int(d_model)
+        self.num_heads = int(num_heads)
+        self.head_dim = self.d_model // self.num_heads
         self.num_neighbors = int(num_neighbors)
-        self.attn = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
         self.out = nn.Linear(d_model, d_model)
+        self.drop = nn.Dropout(dropout)
         self._index_cache: dict[tuple[Tuple[int, int], Tuple[int, int], int, str], torch.Tensor] = {}
 
     def _overlap_indices(
@@ -98,19 +106,31 @@ class RestrictedInterResolutionAttention(nn.Module):
         target_shape: Tuple[int, int],
         source_shapes: List[Tuple[int, int]],
     ) -> torch.Tensor:
-        batch_size, num_target, d_model = target.shape
-        query = target.reshape(batch_size * num_target, 1, d_model)
+        batch_size, num_target, _ = target.shape
+        query = self.q_proj(target).view(batch_size, num_target, self.num_heads, self.head_dim)
         updates = []
 
         for source, source_shape in zip(sources, source_shapes):
             neighbor_idx = self._overlap_indices(target_shape, source_shape, target.device)
-            neighbors = source[:, neighbor_idx, :].reshape(
-                batch_size * num_target,
+            neighbors = source[:, neighbor_idx, :]  # [B, N_target, M, D]
+            key = self.k_proj(neighbors).view(
+                batch_size,
+                num_target,
                 neighbor_idx.shape[1],
-                d_model,
+                self.num_heads,
+                self.head_dim,
             )
-            update = self.attn(query, neighbors, neighbors, need_weights=False)[0]
-            updates.append(update.reshape(batch_size, num_target, d_model))
+            value = self.v_proj(neighbors).view(
+                batch_size,
+                num_target,
+                neighbor_idx.shape[1],
+                self.num_heads,
+                self.head_dim,
+            )
+            logits = (query.unsqueeze(2) * key).sum(dim=-1) * (self.head_dim ** -0.5)
+            weights = self.drop(logits.softmax(dim=2))
+            update = (weights.unsqueeze(-1) * value).sum(dim=2)
+            updates.append(update.reshape(batch_size, num_target, self.d_model))
 
         if not updates:
             return torch.zeros_like(target)
