@@ -26,7 +26,7 @@ from detector2026.core.utils.preprocess import preprocessing_num_channels  # noq
 DEFAULT_OUTPUT_ROOT = (
     "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/mr_yolo_ablation"
 )
-DEFAULT_RUN_NAME = "mr_patch_multiscale_rtdetr_head_enc4_dec4"
+DEFAULT_RUN_NAME = "mr_patch_multiscale_rtdetr_head"
 DEFAULT_BACKBONE_CHECKPOINT = (
     "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/"
     "mr_yolo_ablation/mr_patch_backbone_yolo_one2many_head/best.pt"
@@ -74,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     # Backbone architecture (must match the checkpoint if one is provided)
     parser.add_argument("--d-model", type=int, default=128)
     parser.add_argument("--patch-size", type=int, default=8)
-    parser.add_argument("--num-encoder-layers", type=int, default=4)
+    parser.add_argument("--num-encoder-layers", type=int, default=3)
     parser.add_argument("--num-heads-backbone", type=int, default=4)
     parser.add_argument("--num-intra-points", type=int, default=8)
     parser.add_argument("--num-inter-neighbors", type=int, default=8)
@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
     # RT-DETR head
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--num-queries", type=int, default=100)
-    parser.add_argument("--num-decoder-layers", type=int, default=4)
+    parser.add_argument("--num-decoder-layers", type=int, default=2)
     parser.add_argument("--num-heads-decoder", type=int, default=8)
     parser.add_argument("--num-decoder-points", type=int, default=8)
     parser.add_argument("--dim-feedforward-decoder", type=int, default=1024)
