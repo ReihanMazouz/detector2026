@@ -25,13 +25,18 @@ DEFAULT_EXP1_CHECKPOINT = (
     "yolov11n_p3_rtdetr_ablation/exp1_yolov11n_p3_direct_tal_topk10/best.pt"
 )
 
-# (num_decoder_layers, num_decoder_points)
-HEAD_CONFIGS: list[tuple[int, int]] = [
-    (2, 4),
-    (3, 4),
-    (3, 8),
-    (3, 16),
-    (4, 4),
+# (num_decoder_layers, num_decoder_points, num_heads)
+HEAD_CONFIGS: list[tuple[int, int, int]] = [
+    # 8-head sweep (original)
+    (2, 4, 8),
+    (3, 4, 8),
+    (3, 8, 8),
+    (3, 16, 8),
+    (4, 4, 8),
+    # 4-head sweep
+    (2, 4, 4),
+    (3, 4, 4),
+    (3, 8, 4),
 ]
 
 
@@ -39,10 +44,11 @@ HEAD_CONFIGS: list[tuple[int, int]] = [
 class HeadConfig:
     num_decoder_layers: int
     num_decoder_points: int
+    num_heads: int
 
     @property
     def tag(self) -> str:
-        return f"{self.num_decoder_layers}layers_{self.num_decoder_points}pts"
+        return f"{self.num_decoder_layers}layers_{self.num_decoder_points}pts_{self.num_heads}h"
 
 
 def parse_res_hw(value: str) -> tuple[int, int]:
@@ -156,7 +162,7 @@ def run_head_config(
         )
 
     print(f"\n[RUN] {name}")
-    print(f"      layers={cfg.num_decoder_layers}  points={cfg.num_decoder_points}")
+    print(f"      layers={cfg.num_decoder_layers}  points={cfg.num_decoder_points}  heads={cfg.num_heads}")
     print(f"      init from {exp1_checkpoint}")
 
     model = YOLOv11P3RTDETR(
@@ -171,7 +177,7 @@ def run_head_config(
         hidden_dim=args.hidden_dim,
         num_queries=args.num_queries,
         num_decoder_layers=cfg.num_decoder_layers,
-        num_heads=args.num_heads,
+        num_heads=cfg.num_heads,
         num_decoder_points=cfg.num_decoder_points,
         dim_feedforward=args.dim_feedforward,
         dropout=args.dropout,
@@ -194,7 +200,7 @@ def main() -> None:
     args = parse_args()
     input_channels = preprocessing_num_channels(args.preprocessing)
     exp1_checkpoint = Path(args.exp1_checkpoint)
-    configs = [HeadConfig(layers, pts) for layers, pts in HEAD_CONFIGS]
+    configs = [HeadConfig(layers, pts, heads) for layers, pts, heads in HEAD_CONFIGS]
 
     print("YOLOv11n P3 RT-DETR head capacity ablation")
     print(f"  data_dir        = {args.data_dir}")
@@ -209,7 +215,7 @@ def main() -> None:
     print()
     print("  experiments:")
     for i, cfg in enumerate(configs, 1):
-        print(f"    {i}. {cfg.tag}")
+        print(f"    {i}. {cfg.tag}  (layers={cfg.num_decoder_layers} pts={cfg.num_decoder_points} heads={cfg.num_heads})")
 
     if args.dry_run:
         return
