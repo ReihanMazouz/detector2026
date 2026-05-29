@@ -19,6 +19,8 @@ from torch.utils.data import DataLoader
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from detector2026.core.models.mr_yolo import MR_YOLO  # noqa: E402
+from detector2026.core.models.tf_attn_yolo import TF_Attn_Yolo  # noqa: E402
+from detector2026.core.models.yolov8 import YOLOv8  # noqa: E402
 from detector2026.core.models.mr_yolo_ablation import (  # noqa: E402
     MRPatchBackboneYOLOOne2ManyHead,
     MRYOLOBranchCrossAttentionAblation,
@@ -37,7 +39,16 @@ from detector2026.core.models.yolov11_ablation import (  # noqa: E402
 )
 from detector2026.core.scripts.train_benchmark_suite import (  # noqa: E402
     DEFAULT_RES_KEYS,
+    MR_BACKBONE_MODE,
+    MR_OUTFUSION_CHANNELS_MULT,
+    MR_WIDTH_MULT,
+    YOLO11_WIDTH_MULT,
+    YOLOV8_SCALE,
     find_input_resolutions,
+    output_name_for_mr,
+    output_name_for_tf_attn,
+    output_name_for_yolov11,
+    output_name_for_yolov8,
 )
 from detector2026.core.utils.analysing_results import dataset_analysis_with_metrics  # noqa: E402
 from detector2026.core.utils.dataset import (  # noqa: E402
@@ -351,12 +362,18 @@ def save_compact_curve_payload(
     return path
 
 
-def make_specific_loader(args: argparse.Namespace) -> DataLoader:
+def make_specific_loader(
+    args: argparse.Namespace,
+    res_key: str | None = None,
+    res_hw: tuple[int, int] | None = None,
+) -> DataLoader:
+    res_key = args.res_key if res_key is None else res_key
+    res_hw = tuple(args.res_hw) if res_hw is None else tuple(res_hw)
     dataset = YOLODatasetSpecificRes(
         data_dir=str(Path(args.data_dir) / args.split / "data"),
         labels_dir=str(Path(args.data_dir) / args.split / "labels_detect"),
-        res_hw=tuple(args.res_hw),
-        res_key=args.res_key,
+        res_hw=res_hw,
+        res_key=res_key,
         preprocessing=args.preprocessing,
     )
     return DataLoader(
@@ -367,6 +384,25 @@ def make_specific_loader(args: argparse.Namespace) -> DataLoader:
         pin_memory=torch.cuda.is_available(),
         collate_fn=dataset.collate_fn,
     )
+
+
+def specific_dataset_mode(res_key: str) -> str:
+    return f"specificres:{res_key}"
+
+
+def resolve_specific_dataset_mode(
+    args: argparse.Namespace,
+    mode: str,
+    res_key_to_hw: dict[str, tuple[int, int]],
+) -> tuple[str, tuple[int, int]]:
+    if mode == "specificres":
+        return args.res_key, tuple(args.res_hw)
+    if mode.startswith("specificres:"):
+        res_key = mode.split(":", 1)[1]
+        if res_key not in res_key_to_hw:
+            raise ValueError(f"Unknown resolution key in dataset mode {mode!r}.")
+        return res_key, tuple(res_key_to_hw[res_key])
+    raise ValueError(f"Unsupported specific dataset mode: {mode}")
 
 
 def make_fused_loader(args: argparse.Namespace) -> DataLoader:
@@ -416,6 +452,10 @@ def eval_img_size_for_model(model: torch.nn.Module, spec: EvalSpec, args: argpar
     if spec.dataset_mode == "fused" and hasattr(model, "input_resolutions"):
         resolutions = list(getattr(model, "input_resolutions"))
         return tuple(int(max(values)) for values in zip(*resolutions))
+    if spec.dataset_mode.startswith("specificres:") and hasattr(model, "input_hw"):
+        input_hw = getattr(model, "input_hw")
+        if input_hw is not None:
+            return tuple(input_hw)
     return tuple(args.res_hw)
 
 
@@ -433,6 +473,7 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
             f"Expected {len(DEFAULT_RES_KEYS)} resolutions for MR models, "
             f"found {len(input_resolutions)}: {input_resolutions}"
         )
+    res_key_to_hw = dict(zip(DEFAULT_RES_KEYS, input_resolutions))
 
     yolo_common = dict(
         num_classes=args.num_classes,
@@ -472,6 +513,110 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
             if candidate.is_file():
                 return candidate
         return candidates[0]
+
+    def yolo11_builder(scale: str, res_hw: tuple[int, int]) -> Callable[[str], torch.nn.Module]:
+        return lambda output_dir: YOLOv11(
+            output_dir=output_dir,
+            num_classes=args.num_classes,
+            reg_max=args.reg_max,
+            device=args.device,
+            input_canals=input_channels,
+            width_mult=YOLO11_WIDTH_MULT[scale],
+            input_hw=tuple(res_hw),
+        )
+
+    def tf_attn_builder(scale: str, res_hw: tuple[int, int]) -> Callable[[str], torch.nn.Module]:
+        return lambda output_dir: TF_Attn_Yolo(
+            output_dir=output_dir,
+            num_classes=args.num_classes,
+            reg_max=args.reg_max,
+            device=args.device,
+            input_canals=input_channels,
+            width_mult=YOLO11_WIDTH_MULT[scale],
+            input_hw=tuple(res_hw),
+        )
+
+    def yolov8_builder(scale: str, res_hw: tuple[int, int]) -> Callable[[str], torch.nn.Module]:
+        return lambda output_dir: YOLOv8(
+            output_dir=output_dir,
+            num_classes=args.num_classes,
+            reg_max=args.reg_max,
+            device=args.device,
+            in_ch=input_channels,
+            width_mult=YOLOV8_SCALE[scale]["width_mult"],
+            depth_mult=YOLOV8_SCALE[scale]["depth_mult"],
+            input_hw=tuple(res_hw),
+        )
+
+    def mr_benchmark_builder(
+        scale: str,
+        selected_resolutions: Sequence[tuple[int, int]],
+    ) -> Callable[[str], torch.nn.Module]:
+        return lambda output_dir: MR_YOLO(
+            input_resolutions=list(selected_resolutions),
+            output_dir=output_dir,
+            num_classes=args.num_classes,
+            reg_max=args.reg_max,
+            device=args.device,
+            in_ch=input_channels,
+            width_mult=MR_WIDTH_MULT[scale],
+            backbone_mode=MR_BACKBONE_MODE,
+            outfusion_channels_mult=MR_OUTFUSION_CHANNELS_MULT,
+        )
+
+    benchmark_specs: list[EvalSpec] = []
+
+    central_res_key = args.res_key
+    central_res_hw = tuple(res_key_to_hw.get(central_res_key, tuple(args.res_hw)))
+    for family_name, builder_fn, output_name_fn in (
+        ("YOLOv11", yolo11_builder, output_name_for_yolov11),
+        ("TF_Attn_YOLO", tf_attn_builder, output_name_for_tf_attn),
+        ("YOLOv8", yolov8_builder, output_name_for_yolov8),
+    ):
+        for scale in ("n", "s", "m", "l"):
+            if family_name == "YOLOv11" and scale == "n":
+                continue
+            benchmark_specs.append(
+                EvalSpec(
+                    f"{family_name}_{scale}_central",
+                    "yolo",
+                    ckpt(training_root, output_name_fn(scale, central_res_key)),
+                    "specificres",
+                    builder_fn(scale, central_res_hw),
+                )
+            )
+
+    for res_key, res_hw in res_key_to_hw.items():
+        if res_key == central_res_key:
+            continue
+        benchmark_specs.append(
+            EvalSpec(
+                f"YOLOv11_s_{res_key}",
+                "yolo",
+                ckpt(training_root, output_name_for_yolov11("s", res_key)),
+                specific_dataset_mode(res_key),
+                yolo11_builder("s", tuple(res_hw)),
+            )
+        )
+
+    mr_subset_specs = [
+        ("MR_YOLO_n_all_resolutions", ("n", tuple(DEFAULT_RES_KEYS))),
+        ("MR_YOLO_n_resolutions_256_512_1024", ("n", ("cfg256", "cfg512", "cfg1024"))),
+        ("MR_YOLO_n_resolutions_128_512_2048", ("n", ("cfg128", "cfg512", "cfg2048"))),
+        ("MR_YOLO_n_resolutions_256_1024", ("n", ("cfg256", "cfg1024"))),
+        ("MR_YOLO_s_all_resolutions", ("s", tuple(DEFAULT_RES_KEYS))),
+    ]
+    for spec_name, (scale, res_keys) in mr_subset_specs:
+        selected_resolutions = tuple(res_key_to_hw[res_key] for res_key in res_keys)
+        benchmark_specs.append(
+            EvalSpec(
+                spec_name,
+                "mr_yolo",
+                ckpt(training_root, output_name_for_mr(scale, res_keys)),
+                "fused",
+                mr_benchmark_builder(scale, selected_resolutions),
+            )
+        )
 
     return [
         EvalSpec(
@@ -742,6 +887,7 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
                 matcher_num_threads=8,
             ),
         ),
+        *benchmark_specs,
     ]
 
 
@@ -904,6 +1050,9 @@ def plot_bars(rows: list[dict[str, Any]], output_dir: Path) -> None:
     metrics = [
         ("map50", "mAP@50"),
         ("map50_95", "mAP@50:95"),
+        ("params", "Params (M)", 1e6),
+        ("macs", "MACs (G)", 1e9),
+        ("flops", "FLOPs (G)", 1e9),
         ("recall_low_snr", "Recall low SNR"),
         ("recall_medium_snr", "Recall medium SNR"),
         ("recall_high_snr", "Recall high SNR"),
@@ -919,8 +1068,10 @@ def plot_bars(rows: list[dict[str, Any]], output_dir: Path) -> None:
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    for key, title in metrics:
-        values = [float(row.get(key, float("nan"))) for row in ok_rows]
+    for metric in metrics:
+        key, title = metric[0], metric[1]
+        scale = float(metric[2]) if len(metric) > 2 else 1.0
+        values = [float(row.get(key, float("nan"))) / scale for row in ok_rows]
         fig_height = max(4.0, 0.35 * len(names))
         fig, ax = plt.subplots(figsize=(10, fig_height))
         y = np.arange(len(names))
@@ -928,7 +1079,15 @@ def plot_bars(rows: list[dict[str, Any]], output_dir: Path) -> None:
         ax.set_yticks(y)
         ax.set_yticklabels(names, fontsize=8)
         ax.invert_yaxis()
-        if key not in {"box_center_error_mean", "box_wh_relative_error_mean", "redundant_boxes_per_gt", "redundant_boxes_per_tp"}:
+        if key not in {
+            "params",
+            "macs",
+            "flops",
+            "box_center_error_mean",
+            "box_wh_relative_error_mean",
+            "redundant_boxes_per_gt",
+            "redundant_boxes_per_tp",
+        }:
             ax.set_xlim(0.0, 1.0)
         ax.set_xlabel(title)
         ax.set_title(title)
@@ -956,6 +1115,47 @@ def _snr_centers(snr_bins: Sequence[float]) -> np.ndarray:
     return 0.5 * (bins[:-1] + bins[1:])
 
 
+_MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*", "h", "<", ">", "p", "H", "+", "x"]
+_LINESTYLES = ["-", "--", "-.", ":"]
+
+
+def _curve_style(index: int) -> dict[str, Any]:
+    import matplotlib.pyplot as plt
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    return {
+        "color": colors[index % len(colors)],
+        "marker": _MARKERS[index % len(_MARKERS)],
+        "linestyle": _LINESTYLES[(index // len(plt.rcParams["axes.prop_cycle"].by_key()["color"])) % len(_LINESTYLES)],
+        "markevery": 0.1,
+        "markersize": 5,
+    }
+
+
+def _save_compare_plot(
+    ax: Any,
+    fig: Any,
+    path: "Path",
+    xlabel: str,
+    ylabel: str,
+    title: str,
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
+) -> None:
+    import matplotlib.pyplot as plt
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    ax.grid(True, linestyle="--", alpha=0.35)
+    ax.legend(fontsize=7, ncol=1, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_curves(rows: list[dict[str, Any]], output_dir: Path) -> None:
     try:
         import matplotlib.pyplot as plt
@@ -967,17 +1167,18 @@ def plot_curves(rows: list[dict[str, Any]], output_dir: Path) -> None:
     if not ok_rows:
         return
 
-    curves_dir = output_dir / "plots" / "curves"
-    curves_dir.mkdir(parents=True, exist_ok=True)
-    aggregate_snr = []
-    aggregate_pr = []
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    aggregate_snr: list[tuple[str, np.ndarray, np.ndarray]] = []
+    aggregate_pr: list[tuple[str, np.ndarray, np.ndarray]] = []
+    aggregate_f1: list[tuple[str, np.ndarray, np.ndarray]] = []
 
     for row in ok_rows:
         payload = _load_compact_payload(row)
         if payload is None:
             continue
         model_name = row["model"]
-        stem = sanitize_filename(model_name)
         pr = payload.get("precision_recall", {})
         recall = np.asarray(pr.get("recall", []), dtype=float)
         precision = np.asarray(pr.get("precision", []), dtype=float)
@@ -989,90 +1190,45 @@ def plot_curves(rows: list[dict[str, Any]], output_dir: Path) -> None:
         snr_centers = _snr_centers(snr_bins)
 
         if len(recall) and len(precision):
-            fig, ax = plt.subplots(figsize=(6, 5))
-            ax.plot(recall, precision, linewidth=2.0)
-            ax.set_xlabel("Recall")
-            ax.set_ylabel("Precision")
-            ax.set_title(f"Precision-Recall - {model_name}")
-            ax.set_xlim(0.0, 1.0)
-            ax.set_ylim(0.0, 1.0)
-            ax.grid(True, linestyle="--", alpha=0.35)
-            fig.tight_layout()
-            fig.savefig(curves_dir / f"{stem}_precision_recall.png", dpi=200)
-            plt.close(fig)
             aggregate_pr.append((model_name, recall, precision))
 
-        if len(thresholds) and len(recall) and len(precision):
-            fig, ax = plt.subplots(figsize=(7, 5))
-            ax.plot(thresholds, recall, label="Recall", linewidth=2.0)
-            ax.plot(thresholds, precision, label="Precision", linewidth=2.0)
-            ax.set_xlabel("Confidence threshold")
-            ax.set_ylabel("Score")
-            ax.set_title(f"Precision/Recall vs threshold - {model_name}")
-            ax.set_xlim(0.0, 1.0)
-            ax.set_ylim(0.0, 1.0)
-            ax.grid(True, linestyle="--", alpha=0.35)
-            ax.legend()
-            fig.tight_layout()
-            fig.savefig(curves_dir / f"{stem}_precision_recall_threshold.png", dpi=200)
-            plt.close(fig)
-
         if len(thresholds) and len(f1):
-            fig, ax = plt.subplots(figsize=(7, 5))
-            ax.plot(thresholds, f1, color="#2CA02C", linewidth=2.0)
-            ax.set_xlabel("Confidence threshold")
-            ax.set_ylabel("F1-score")
-            ax.set_title(f"F1-score vs threshold - {model_name}")
-            ax.set_xlim(0.0, 1.0)
-            ax.set_ylim(0.0, 1.0)
-            ax.grid(True, linestyle="--", alpha=0.35)
-            fig.tight_layout()
-            fig.savefig(curves_dir / f"{stem}_f1_threshold.png", dpi=200)
-            plt.close(fig)
+            aggregate_f1.append((model_name, thresholds, f1))
 
         if len(snr_centers) and len(snr_recall):
-            fig, ax = plt.subplots(figsize=(7, 5))
-            ax.plot(snr_centers, snr_recall, marker="o", linewidth=2.0)
-            ax.set_xlabel("SNR (dB)")
-            ax.set_ylabel("Recall")
-            ax.set_title(f"Recall vs SNR - {model_name}")
-            ax.set_ylim(0.0, 1.0)
-            ax.grid(True, linestyle="--", alpha=0.35)
-            fig.tight_layout()
-            fig.savefig(curves_dir / f"{stem}_recall_snr.png", dpi=200)
-            plt.close(fig)
             aggregate_snr.append((model_name, snr_centers, snr_recall))
 
     if aggregate_snr:
         fig_height = max(5.0, min(12.0, 0.28 * len(aggregate_snr) + 4.0))
         fig, ax = plt.subplots(figsize=(10, fig_height))
-        for model_name, x, y in aggregate_snr:
-            ax.plot(x, y, marker="o", linewidth=1.6, label=model_name)
-        ax.set_xlabel("SNR (dB)")
-        ax.set_ylabel("Recall")
-        ax.set_title("Recall vs SNR")
-        ax.set_ylim(0.0, 1.0)
-        ax.grid(True, linestyle="--", alpha=0.35)
-        ax.legend(fontsize=7, ncol=1, loc="center left", bbox_to_anchor=(1.0, 0.5))
-        fig.tight_layout()
-        fig.savefig(curves_dir / "compare_recall_snr.png", dpi=200, bbox_inches="tight")
-        plt.close(fig)
+        for index, (model_name, x, y) in enumerate(aggregate_snr):
+            ax.plot(x, y, linewidth=1.6, label=model_name, **_curve_style(index))
+        _save_compare_plot(
+            ax, fig, plots_dir / "compare_recall_snr.png",
+            xlabel="SNR (dB)", ylabel="Recall", title="Recall vs SNR", ylim=(0.0, 1.0),
+        )
 
     if aggregate_pr:
         fig_height = max(5.0, min(12.0, 0.28 * len(aggregate_pr) + 4.0))
         fig, ax = plt.subplots(figsize=(10, fig_height))
-        for model_name, x, y in aggregate_pr:
-            ax.plot(x, y, linewidth=1.6, label=model_name)
-        ax.set_xlabel("Recall")
-        ax.set_ylabel("Precision")
-        ax.set_title("Precision-Recall")
-        ax.set_xlim(0.0, 1.0)
-        ax.set_ylim(0.0, 1.0)
-        ax.grid(True, linestyle="--", alpha=0.35)
-        ax.legend(fontsize=7, ncol=1, loc="center left", bbox_to_anchor=(1.0, 0.5))
-        fig.tight_layout()
-        fig.savefig(curves_dir / "compare_precision_recall.png", dpi=200, bbox_inches="tight")
-        plt.close(fig)
+        for index, (model_name, x, y) in enumerate(aggregate_pr):
+            ax.plot(x, y, linewidth=1.6, label=model_name, **_curve_style(index))
+        _save_compare_plot(
+            ax, fig, plots_dir / "compare_precision_recall.png",
+            xlabel="Recall", ylabel="Precision", title="Precision-Recall",
+            xlim=(0.0, 1.0), ylim=(0.0, 1.0),
+        )
+
+    if aggregate_f1:
+        fig_height = max(5.0, min(12.0, 0.28 * len(aggregate_f1) + 4.0))
+        fig, ax = plt.subplots(figsize=(10, fig_height))
+        for index, (model_name, x, y) in enumerate(aggregate_f1):
+            ax.plot(x, y, linewidth=1.6, label=model_name, **_curve_style(index))
+        _save_compare_plot(
+            ax, fig, plots_dir / "compare_f1_threshold.png",
+            xlabel="Confidence threshold", ylabel="F1-score", title="F1-score vs threshold",
+            xlim=(0.0, 1.0), ylim=(0.0, 1.0),
+        )
 
 
 def main() -> None:
@@ -1102,9 +1258,12 @@ def main() -> None:
     if reusable_rows_by_model and not args.overwrite:
         print(f"[INFO] reprise: {len(reusable_rows_by_model)} modèles déjà évalués seront conservés")
 
-    specific_loader = make_specific_loader(args)
-    fused_loader = make_fused_loader(args)
-    loaders = {"specificres": specific_loader, "fused": fused_loader}
+    input_resolutions = find_input_resolutions(args.data_dir, split=args.split)
+    res_key_to_hw = dict(zip(DEFAULT_RES_KEYS, input_resolutions))
+    loaders: dict[str, DataLoader] = {"fused": make_fused_loader(args)}
+    for mode in sorted({spec.dataset_mode for spec in specs if spec.dataset_mode.startswith("specificres")}):
+        res_key, res_hw = resolve_specific_dataset_mode(args, mode, res_key_to_hw)
+        loaders[mode] = make_specific_loader(args, res_key=res_key, res_hw=res_hw)
     class_index_to_name = load_class_index_to_name(Path(args.data_dir))
 
     new_rows: list[dict[str, Any]] = []
