@@ -10,7 +10,7 @@ import torch
 from fastapi import HTTPException
 
 from .config import PROJECT_ROOT
-from .datasets import _load_class_index_to_name, sample_preview_payload
+from .datasets import _load_class_index_to_name, _sample_cfg_labels, sample_preview_payload
 
 WORKSPACE_ROOT = PROJECT_ROOT.parent
 if str(WORKSPACE_ROOT) not in sys.path:
@@ -42,6 +42,30 @@ def _load_run_config(run_dir: Path) -> Dict[str, Any] | None:
         return None
 
 
+def _infer_num_classes_from_checkpoint(checkpoint_path: Path) -> int | None:
+    try:
+        state_dict = torch.load(checkpoint_path, map_location="cpu")
+    except Exception:
+        return None
+
+    final_candidates: List[int] = []
+    fallback_candidates: List[int] = []
+    for key, value in state_dict.items():
+        if not isinstance(key, str) or not torch.is_tensor(value):
+            continue
+        if "detect.cv_clsobj" in key and key.endswith(".weight") and value.ndim == 4:
+            out_channels = int(value.shape[0])
+            fallback_candidates.append(out_channels)
+            if re.search(r"detect\.cv_clsobj\.\d+\.2\.weight$", key):
+                final_candidates.append(out_channels)
+
+    if final_candidates:
+        return final_candidates[0]
+    if fallback_candidates:
+        return min(fallback_candidates)
+    return None
+
+
 def _read_model_summary(run_dir: Path) -> str:
     summary_path = run_dir / "model_summary.txt"
     if not summary_path.is_file():
@@ -71,6 +95,13 @@ def _find_sample_data_path(dataset_path: Path, split: str, sample_id: str) -> Pa
     if not data_path.is_file():
         raise HTTPException(status_code=404, detail=f"Sample tensor introuvable pour '{sample_id}'.")
     return data_path
+
+
+def _find_sample_label_path(dataset_path: Path, split: str, sample_id: str) -> Path:
+    label_path = dataset_path / split / "labels_detect" / f"{sample_id}.json"
+    if not label_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Label introuvable pour '{sample_id}'.")
+    return label_path
 
 
 def _load_spectra(data_path: Path) -> List[torch.Tensor]:
@@ -216,6 +247,72 @@ def _build_model(checkpoint_path: Path, dataset_path: Path, split: str, sample_i
 
     model.load_weights(str(checkpoint_path), device="cpu", eval_mode=True)
     return model, sample_tensors
+
+
+def _config_specific_res_hw(config: Dict[str, Any] | None) -> Tuple[int, int] | None:
+    if not config:
+        return None
+    data_loading = dict(config.get("data_loading", {}))
+    if str(data_loading.get("dataset_mode", "")).lower() == "specificres":
+        select_res = dict(data_loading.get("select_res", {}))
+        res_hw = select_res.get("res_hw")
+    else:
+        training = dict(config.get("training", {}))
+        if str(training.get("dataset_mode", "")).lower() != "specificres":
+            return None
+        model_config = dict(config.get("model_config", {}))
+        res_hw = model_config.get("res_hw")
+    if not isinstance(res_hw, (list, tuple)) or len(res_hw) != 2:
+        return None
+    return int(res_hw[0]), int(res_hw[1])
+
+
+def _find_cfg_index_for_res_hw(sample_tensors: List[torch.Tensor], res_hw: Tuple[int, int]) -> int:
+    target_h, target_w = int(res_hw[0]), int(res_hw[1])
+    for idx, tensor in enumerate(sample_tensors):
+        if tuple(tensor.shape[-2:]) == (target_h, target_w):
+            return idx
+    raise HTTPException(
+        status_code=400,
+        detail=f"Aucun tenseur de taille {res_hw} dans le sample pour ce run specificres.",
+    )
+
+
+def _infer_specific_res_key(config: Dict[str, Any] | None, run_dir: Path) -> str | None:
+    if config:
+        data_loading = dict(config.get("data_loading", {}))
+        select_res = dict(data_loading.get("select_res", {}))
+        res_key = select_res.get("res_key")
+        if isinstance(res_key, str) and res_key:
+            return res_key
+
+        training = dict(config.get("training", {}))
+        if str(training.get("dataset_mode", "")).lower() == "specificres":
+            model_config = dict(config.get("model_config", {}))
+            fallback_res_key = model_config.get("res_key")
+            if isinstance(fallback_res_key, str) and fallback_res_key:
+                return fallback_res_key
+
+    run_name = run_dir.name
+    match = re.search(r"(?:specificres_|cfg)(\d+)", run_name)
+    if match:
+        return f"cfg{match.group(1)}"
+    return None
+
+
+def _find_cfg_index_for_res_key(label_path: Path, spectra_len: int, res_key: str) -> int:
+    try:
+        labels = json.loads(label_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Impossible de lire les labels pour resoudre '{res_key}': {exc}") from exc
+
+    cfg_labels = _sample_cfg_labels(labels if isinstance(labels, list) else [], spectra_len)
+    if res_key not in cfg_labels:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Le sample ne contient pas de mapping cfg vers '{res_key}'. Valeurs disponibles: {cfg_labels}",
+        )
+    return cfg_labels.index(res_key)
 
 
 def _prediction_boxes(processed_output: List[torch.Tensor], class_index_to_name: Dict[int, str], width: int, height: int) -> List[Dict[str, Any]]:
@@ -375,6 +472,16 @@ def _analysis_payload(
     }
 
 
+def _candidate_rank_key(candidate: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    summary = dict(candidate.get("analysis", {}).get("summary", {}))
+    return (
+        float(summary.get("tp_count", 0)),
+        -float(summary.get("fn_count", 0)),
+        -float(summary.get("fp_count", 0)),
+        float(summary.get("average_confidence", 0.0)),
+    )
+
+
 def artifacts_preview_payload(
     dataset_path: Path,
     *,
@@ -385,48 +492,121 @@ def artifacts_preview_payload(
     conf_thres: float = 0.1,
     iou_thres: float = 0.1,
 ) -> Dict[str, Any]:
-    preview = sample_preview_payload(dataset_path, split=split, sample_id=sample_id, cfg_index=cfg_index)
     resolved_checkpoint = _resolve_checkpoint_path(checkpoint_path)
+    run_config = _load_run_config(resolved_checkpoint.parent)
+    data_path = _find_sample_data_path(dataset_path, split, sample_id)
+    label_path = _find_sample_label_path(dataset_path, split, sample_id)
+    sample_tensors = _load_spectra(data_path)
+
+    effective_cfg_index = cfg_index
+    specific_res_hw = _config_specific_res_hw(run_config)
+    if specific_res_hw is not None:
+        effective_cfg_index = _find_cfg_index_for_res_hw(sample_tensors, specific_res_hw)
+    else:
+        specific_res_key = _infer_specific_res_key(run_config, resolved_checkpoint.parent)
+        if specific_res_key is not None:
+            effective_cfg_index = _find_cfg_index_for_res_key(label_path, len(sample_tensors), specific_res_key)
+
     class_index_to_name = _load_class_index_to_name(dataset_path)
-    num_classes = max(len(class_index_to_name), 1)
+    config_num_classes = None
+    if run_config is not None:
+        model_config = dict(run_config.get("model_config", {}))
+        if model_config.get("num_classes") is not None:
+            config_num_classes = int(model_config["num_classes"])
+    checkpoint_num_classes = _infer_num_classes_from_checkpoint(resolved_checkpoint)
+    num_classes = int(config_num_classes or checkpoint_num_classes or max(len(class_index_to_name), 1))
 
     model, sample_tensors = _build_model(resolved_checkpoint, dataset_path, split, sample_id, num_classes)
-    model_inputs: Any
+
+    candidate_payloads: List[Dict[str, Any]] = []
     if isinstance(model, MR_YOLO):
-        model_inputs = sample_tensors
+        preview = sample_preview_payload(dataset_path, split=split, sample_id=sample_id, cfg_index=effective_cfg_index)
+        processed_output, _, _ = model.predict(
+            sample_tensors,
+            conf_threshold=conf_thres,
+            iou_thres=iou_thres,
+        )
+        predictions = _prediction_boxes(
+            processed_output,
+            class_index_to_name,
+            width=int(preview["image"]["width"]),
+            height=int(preview["image"]["height"]),
+        )
+        analysis = _analysis_payload(
+            preview_boxes=preview["boxes"],
+            processed_output=processed_output,
+            class_index_to_name=class_index_to_name,
+            image_width=int(preview["image"]["width"]),
+            image_height=int(preview["image"]["height"]),
+            iou_thres=iou_thres,
+        )
     else:
-        if cfg_index < 0 or cfg_index >= len(sample_tensors):
-            raise HTTPException(status_code=400, detail=f"cfg_index invalide pour le checkpoint fourni: {cfg_index}")
-        model_inputs = sample_tensors[cfg_index]
+        auto_select_legacy_cfg = run_config is None and len(sample_tensors) > 1
+        candidate_indices = range(len(sample_tensors)) if auto_select_legacy_cfg else [effective_cfg_index]
+        for candidate_idx in candidate_indices:
+            if candidate_idx < 0 or candidate_idx >= len(sample_tensors):
+                continue
+            candidate_preview = sample_preview_payload(dataset_path, split=split, sample_id=sample_id, cfg_index=candidate_idx)
+            candidate_output, _, _ = model.predict(
+                sample_tensors[candidate_idx],
+                conf_threshold=conf_thres,
+                iou_thres=iou_thres,
+            )
+            candidate_predictions = _prediction_boxes(
+                candidate_output,
+                class_index_to_name,
+                width=int(candidate_preview["image"]["width"]),
+                height=int(candidate_preview["image"]["height"]),
+            )
+            candidate_analysis = _analysis_payload(
+                preview_boxes=candidate_preview["boxes"],
+                processed_output=candidate_output,
+                class_index_to_name=class_index_to_name,
+                image_width=int(candidate_preview["image"]["width"]),
+                image_height=int(candidate_preview["image"]["height"]),
+                iou_thres=iou_thres,
+            )
+            candidate_payloads.append(
+                {
+                    "cfg_index": int(candidate_idx),
+                    "preview": candidate_preview,
+                    "processed_output": candidate_output,
+                    "predictions": candidate_predictions,
+                    "analysis": candidate_analysis,
+                }
+            )
 
-    processed_output, _, _ = model.predict(
-        model_inputs,
-        conf_threshold=conf_thres,
-        iou_thres=iou_thres,
-    )
+        if not candidate_payloads:
+            raise HTTPException(status_code=400, detail="Aucune entree candidate valide pour l'inference.")
 
-    predictions = _prediction_boxes(
-        processed_output,
-        class_index_to_name,
-        width=int(preview["image"]["width"]),
-        height=int(preview["image"]["height"]),
-    )
+        best_candidate = max(candidate_payloads, key=_candidate_rank_key)
+        effective_cfg_index = int(best_candidate["cfg_index"])
+        preview = best_candidate["preview"]
+        processed_output = best_candidate["processed_output"]
+        predictions = best_candidate["predictions"]
+        analysis = best_candidate["analysis"]
 
     preview["checkpoint_path"] = str(resolved_checkpoint)
+    preview["requested_cfg_index"] = int(cfg_index)
+    preview["cfg_index"] = int(effective_cfg_index)
     preview["predictions"] = predictions
     preview["prediction_count"] = len(predictions)
-    preview["analysis"] = _analysis_payload(
-        preview_boxes=preview["boxes"],
-        processed_output=processed_output,
-        class_index_to_name=class_index_to_name,
-        image_width=int(preview["image"]["width"]),
-        image_height=int(preview["image"]["height"]),
-        iou_thres=iou_thres,
-    )
+    preview["analysis"] = analysis
     preview["inference"] = {
         "conf_thres": conf_thres,
         "iou_thres": iou_thres,
         "device": str(model.device),
         "model_name": model.__class__.__name__,
+        "effective_cfg_index": int(effective_cfg_index),
     }
+    if candidate_payloads:
+        preview["inference"]["cfg_candidates"] = [
+            {
+                "cfg_index": int(candidate["cfg_index"]),
+                "prediction_count": int(len(candidate["predictions"])),
+                "summary": dict(candidate["analysis"]["summary"]),
+            }
+            for candidate in candidate_payloads
+        ]
+        preview["inference"]["auto_selected_cfg"] = True
     return preview

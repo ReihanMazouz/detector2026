@@ -10,7 +10,7 @@ import torch
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
-from detector2026.core.models.mr_yolo_ablation import MRPatchMultiScaleRTDETRHead  # noqa: E402
+from detector2026.core.models.mr_yolo_ablation import MRPatchMultiResRTDETRHead  # noqa: E402
 from detector2026.core.scripts.train_benchmark_suite import (  # noqa: E402
     DEFAULT_DATA_DIR,
     DEFAULT_DEVICE,
@@ -26,7 +26,7 @@ from detector2026.core.utils.preprocess import preprocessing_num_channels  # noq
 DEFAULT_OUTPUT_ROOT = (
     "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/mr_yolo_ablation"
 )
-DEFAULT_RUN_NAME = "mr_patch_multiscale_rtdetr_head"
+DEFAULT_RUN_NAME = "mr_patch_multires_rtdetr_head"
 DEFAULT_BACKBONE_CHECKPOINT = (
     "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/"
     "mr_yolo_ablation/mr_patch_backbone_yolo_one2many_head/best.pt"
@@ -46,7 +46,7 @@ def parse_hw(value: str) -> tuple[int, int]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Train MRPatchMultiScaleRTDETRHead: each resolution keeps its natural patch-grid "
+            "Train MRPatchMultiResRTDETRHead: each resolution keeps its natural patch-grid "
             "feature map; the RT-DETR decoder attends across all levels simultaneously."
         )
     )
@@ -120,7 +120,7 @@ def main() -> None:
     patch_shapes = [(h // args.patch_size, w // args.patch_size) for h, w in input_resolutions]
     total_tokens = sum(h * w for h, w in patch_shapes)
 
-    print("MRPatchMultiScaleRTDETRHead ablation")
+    print("MRPatchMultiResRTDETRHead ablation")
     print(f"  output_dir          = {output_dir}")
     print(f"  device              = {args.device}")
     print(f"  backbone_checkpoint = {backbone_ckpt}  exists={backbone_ckpt.is_file()}")
@@ -144,7 +144,7 @@ def main() -> None:
         return
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    model = MRPatchMultiScaleRTDETRHead(
+    model = MRPatchMultiResRTDETRHead(
         input_resolutions=list(input_resolutions),
         output_dir=str(output_dir),
         num_classes=args.num_classes,

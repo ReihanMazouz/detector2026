@@ -1,4 +1,4 @@
-"""MR patch backbone (no fusion downsampling) with a multi-scale RT-DETR head.
+"""MR patch backbone (no fusion downsampling) with a multi-res RT-DETR head.
 
 Each resolution keeps its natural patch-grid feature map; the RT-DETR
 deformable decoder attends across all levels simultaneously instead of
@@ -38,7 +38,7 @@ def _move_to_device(imgs, device: str, non_blocking: bool = True):
 
 # ── backbone ──────────────────────────────────────────────────────────────────
 
-class IsotropicMultiScalePatchBackbone(nn.Module):
+class IsotropicMultiResPatchBackbone(nn.Module):
     """Same encoder as IsotropicRestrictedPatchBackbone but without the fusion
     step.  Returns one (B, d_model, H_i, W_i) feature map per resolution at its
     natural patch-grid size instead of everything collapsed to p3_hw."""
@@ -139,8 +139,8 @@ class IsotropicMultiScalePatchBackbone(nn.Module):
 
 # ── model ─────────────────────────────────────────────────────────────────────
 
-class MRPatchMultiScaleRTDETRHead(BaseModel):
-    """IsotropicMultiScalePatchBackbone + multi-level RT-DETR head.
+class MRPatchMultiResRTDETRHead(BaseModel):
+    """IsotropicMultiResPatchBackbone + multi-level RT-DETR head.
 
     Each input resolution contributes its own feature map to the RT-DETR
     decoder; no information is lost to bilinear downsampling.
@@ -184,7 +184,7 @@ class MRPatchMultiScaleRTDETRHead(BaseModel):
             max(r[1] for r in self.input_resolutions),
         )
 
-        self.backbone = IsotropicMultiScalePatchBackbone(
+        self.backbone = IsotropicMultiResPatchBackbone(
             input_resolutions=self.input_resolutions,
             in_ch=in_ch,
             d_model=d_model,
@@ -299,7 +299,7 @@ class MRPatchMultiScaleRTDETRHead(BaseModel):
         **_,
     ):
         if monitor != "val_loss":
-            raise ValueError("MRPatchMultiScaleRTDETRHead only supports monitor='val_loss'.")
+            raise ValueError("MRPatchMultiResRTDETRHead only supports monitor='val_loss'.")
 
         ds_kw = dict(
             res_keys=res_keys,
@@ -396,7 +396,7 @@ class MRPatchMultiScaleRTDETRHead(BaseModel):
                 bad_epochs += 1
 
             print(
-                f"MR-Patch MultiScale RTDETR epoch {epoch}: "
+                f"MR-Patch MultiRes RTDETR epoch {epoch}: "
                 f"train={train_loss:.4f}  val={val_loss:.4f}  "
                 f"time={time.perf_counter() - t0:.1f}s"
             )

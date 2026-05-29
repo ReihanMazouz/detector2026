@@ -48,31 +48,31 @@ OUTPUT_DIR = Path("/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_da
 MODEL_SPECS = [
     {
         "label": "cfg512",
-        "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_512/best.pt",
+        "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_cfg512/best.pt",
         "res_key": "cfg512",
         "res_hw": (256, 256),
     },
     # {
     #     "label": "cfg256",
-    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_256/best.pt",
+    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_cfg256/best.pt",
     #     "res_key": "cfg256",
     #     "res_hw": (128, 512),
     # },
     # {
     #     "label": "cfg128",
-    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_128/best.pt",
+    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_cfg128/best.pt",
     #     "res_key": "cfg128",
     #     "res_hw": (64, 1024),
     # },
     # {
     #     "label": "cfg2048",
-    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_2048/best.pt",
+    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_cfg2048/best.pt",
     #     "res_key": "cfg2048",
     #     "res_hw": (1024, 64),
     # },
     # {
     #     "label": "cfg1024",
-    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_1024/best.pt",
+    #     "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_cfg1024/best.pt",
     #     "res_key": "cfg1024",
     #     "res_hw": (512, 128),
     # },
@@ -264,7 +264,7 @@ def _run_one_model_on_one_sample(
     raw_tensor = _pick_tensor_for_resolution(raw_tensors, tuple(spec["res_hw"]))
 
     preprocess = build_preprocessor(PREPROCESSING)
-    image = preprocess(raw_tensor, cfg_key=spec["res_key"]).unsqueeze(0).to(model.device)
+    image = preprocess(raw_tensor, cfg_key=spec["res_key"]).unsqueeze(0).to(model.device, dtype=torch.float32)
 
     with torch.no_grad():
         dist_out, cls_out = model(image)

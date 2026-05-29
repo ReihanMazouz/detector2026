@@ -279,6 +279,8 @@ class BaseModel(nn.Module):
         full_eval_every=1,
         save_last_every=5,
         monitor="val_loss",
+        validate=True,
+        minimal_outputs=False,
         run_full_eval=True):
         """
         Fonction d'apprentissage du modèle.
@@ -291,6 +293,8 @@ class BaseModel(nn.Module):
         full_eval_every = max(1, int(full_eval_every))
         save_last_every = max(1, int(save_last_every))
         plot_every = full_eval_every
+        validate = bool(validate)
+        minimal_outputs = bool(minimal_outputs)
         run_full_eval = bool(run_full_eval)
         monitor = str(monitor).strip()
         if monitor.lower() == "map50:95":
@@ -299,9 +303,13 @@ class BaseModel(nn.Module):
             monitor = "map50"
         if not run_full_eval and monitor not in {"val_loss", "train_loss"}:
             raise ValueError("run_full_eval=False only supports monitor='val_loss' or monitor='train_loss'.")
+        if not validate and monitor != "train_loss":
+            print(f"[ℹ] Validation disabled; switching monitor from '{monitor}' to 'train_loss'.")
+            monitor = "train_loss"
         monitor_mode = "min" if "loss" in monitor.lower() else "max"
 
-        self.save_model_summary(self, self.output_dir)
+        if not minimal_outputs:
+            self.save_model_summary(self, self.output_dir)
 
         # ---------------- jeux de données ----------------
         DATASETS = {
@@ -322,8 +330,9 @@ class BaseModel(nn.Module):
 
         img_size = None
 
-        for split in ("train", "val"):
-            self._check_dataset_dirs(data_dir, split, dataset_name)
+        self._check_dataset_dirs(data_dir, "train", dataset_name)
+        if validate:
+            self._check_dataset_dirs(data_dir, "val", dataset_name)
 
         if dataset_name == "singleres":
             selected_res = select_res.get("res_key") if isinstance(select_res, dict) else select_res
@@ -334,13 +343,15 @@ class BaseModel(nn.Module):
                 preprocessing=preprocessing,
                 preprocessing_kwargs=preprocessing_kwargs,
             )
-            val_dataset = YOLODataset(
-                os.path.join(data_dir, "val/data"),
-                os.path.join(data_dir, "val/labels_detect"),
-                select_res=selected_res,
-                preprocessing=preprocessing,
-                preprocessing_kwargs=preprocessing_kwargs,
-            )
+            val_dataset = None
+            if validate:
+                val_dataset = YOLODataset(
+                    os.path.join(data_dir, "val/data"),
+                    os.path.join(data_dir, "val/labels_detect"),
+                    select_res=selected_res,
+                    preprocessing=preprocessing,
+                    preprocessing_kwargs=preprocessing_kwargs,
+                )
 
         elif dataset_name == "specificres":
             # expected: select_res = { "res_hw": (H, W), "res_key": "cfgXXX" }
@@ -359,14 +370,16 @@ class BaseModel(nn.Module):
                 preprocessing_kwargs=preprocessing_kwargs,
             )
 
-            val_dataset = YOLODataset(
-                data_dir=os.path.join(data_dir, "val/data"),
-                labels_dir=os.path.join(data_dir, "val/labels_detect"),
-                res_hw=res_hw,
-                res_key=res_key,
-                preprocessing=preprocessing,
-                preprocessing_kwargs=preprocessing_kwargs,
-            )
+            val_dataset = None
+            if validate:
+                val_dataset = YOLODataset(
+                    data_dir=os.path.join(data_dir, "val/data"),
+                    labels_dir=os.path.join(data_dir, "val/labels_detect"),
+                    res_hw=res_hw,
+                    res_key=res_key,
+                    preprocessing=preprocessing,
+                    preprocessing_kwargs=preprocessing_kwargs,
+                )
 
         else:
             fused_res_keys = None
@@ -382,17 +395,19 @@ class BaseModel(nn.Module):
                 preprocessing=preprocessing,
                 preprocessing_kwargs=preprocessing_kwargs,
             )
-            val_dataset = YOLODataset(
-                os.path.join(data_dir, "val/data"),
-                os.path.join(data_dir, "val/labels_detect"),
-                res_keys=fused_res_keys,
-                preprocessing=preprocessing,
-                preprocessing_kwargs=preprocessing_kwargs,
-            )
+            val_dataset = None
+            if validate:
+                val_dataset = YOLODataset(
+                    os.path.join(data_dir, "val/data"),
+                    os.path.join(data_dir, "val/labels_detect"),
+                    res_keys=fused_res_keys,
+                    preprocessing=preprocessing,
+                    preprocessing_kwargs=preprocessing_kwargs,
+                )
             if fused_res_keys is not None:
                 print(f"[info] Fused MR resolution order: {list(fused_res_keys)}")
 
-        img_size = _resolve_eval_img_size(self, val_dataset, fallback=img_size)
+        img_size = _resolve_eval_img_size(self, val_dataset or train_dataset, fallback=img_size)
 
         pin_memory = _supports_cuda(self.device)
         resolved_num_workers = _resolve_num_workers(num_workers)
@@ -406,20 +421,23 @@ class BaseModel(nn.Module):
             "num_workers": resolved_num_workers,
             "persistent_workers": persistent_workers,
         }
-        val_loader_kwargs = {
-            "batch_size": batch_size,
-            "shuffle": False,
-            "pin_memory": pin_memory,
-            "collate_fn": val_dataset.collate_fn,
-            "num_workers": resolved_num_workers,
-            "persistent_workers": persistent_workers,
-        }
+        val_loader_kwargs = None
+        if validate:
+            val_loader_kwargs = {
+                "batch_size": batch_size,
+                "shuffle": False,
+                "pin_memory": pin_memory,
+                "collate_fn": val_dataset.collate_fn,
+                "num_workers": resolved_num_workers,
+                "persistent_workers": persistent_workers,
+            }
         if resolved_num_workers > 0:
             train_loader_kwargs["prefetch_factor"] = 2
-            val_loader_kwargs["prefetch_factor"] = 2
+            if val_loader_kwargs is not None:
+                val_loader_kwargs["prefetch_factor"] = 2
 
         train_loader = DataLoader(train_dataset, **train_loader_kwargs)
-        val_loader = DataLoader(val_dataset, **val_loader_kwargs)
+        val_loader = DataLoader(val_dataset, **val_loader_kwargs) if validate else None
         print(
             f"[ℹ] DataLoader config | num_workers={resolved_num_workers} | "
             f"pin_memory={pin_memory} | persistent_workers={persistent_workers}"
@@ -428,6 +446,7 @@ class BaseModel(nn.Module):
             f"[ℹ] Training cadence | full_eval_every={full_eval_every} | "
             f"plot_every={plot_every} | save_last_every={save_last_every}"
         )
+        print(f"[ℹ] Validation | {'enabled' if validate else 'disabled'}")
         print(f"[ℹ] Full detection metrics during training | {'enabled' if run_full_eval else 'disabled'}")
         print(f"[ℹ] Eval image size | {img_size}")
         print(f"[ℹ] Monitor | {monitor} ({monitor_mode})")
@@ -451,7 +470,7 @@ class BaseModel(nn.Module):
         best_path = os.path.join(self.output_dir, "best.pt")
         last_path = os.path.join(self.output_dir, "last.pt")
 
-        logger = MetricsLogger(log_path)
+        logger = None if minimal_outputs else MetricsLogger(log_path)
 
         eval_runner = None
         extra_headers = []
@@ -467,6 +486,8 @@ class BaseModel(nn.Module):
         optimizer = optim.Adam(self.parameters(), lr=lr)
         scaler = _build_grad_scaler(amp_enabled)
         criterion = self.criterion
+        best_monitor_value = float("inf") if monitor_mode == "min" else float("-inf")
+        epochs_without_improvement = 0
 
         # =================================================
         for epoch in range(1, epochs + 1):
@@ -574,63 +595,71 @@ class BaseModel(nn.Module):
             train_loss = running_train_loss / n_train_batches
 
             # ---------- Validation ----------
-            self.eval()
-            loss_box_val = loss_cls_val = loss_dfl_val = running_val_loss = 0.0
+            loss_box_val = loss_cls_val = loss_dfl_val = val_loss = float("nan")
             val_data_time = 0.0
             val_step_time = 0.0
+            n_val_batches = 1
 
-            val_pbar = tqdm(val_loader, desc=f"Epoch {epoch} 🧪 Validation", unit="batch")
-            with torch.no_grad():
-                batch_wait_start = time.perf_counter()
-                for imgs, targets, res_keys in val_pbar:
-                    if hasattr(self, "res_keys") and res_keys is not None and tuple(res_keys) != tuple(self.res_keys):
-                        raise ValueError(
-                            f"Validation batch resolution order mismatch: dataset returned {tuple(res_keys)}, "
-                            f"model expects {tuple(self.res_keys)}."
-                        )
-                    batch_ready_time = time.perf_counter()
-                    val_data_time += batch_ready_time - batch_wait_start
+            if validate:
+                self.eval()
+                loss_box_val = loss_cls_val = loss_dfl_val = running_val_loss = 0.0
 
-                    step_start = time.perf_counter()
-                    imgs = _move_imgs_to_device(imgs, self.device, non_blocking=pin_memory)
-    
-                    targets = _to_device(targets, self.device)
-                    batch = {
-                        "batch_idx": targets[:, 0].long(),
-                        "cls": targets[:, 1].unsqueeze(1).long(),
-                        "bboxes": targets[:, 2:6],
-                        "snr": targets[:, 6].unsqueeze(1)
-                    }
-
-                    with _autocast_context(self.device, amp_enabled):
-                        dist_out, clsobj_out = self(imgs)
-                        feats = dist_out
-                        pred_scores = torch.cat([x.flatten(2).permute(0, 2, 1) for x in clsobj_out], dim=1)
-                        pred_distri = torch.cat([x.flatten(2).permute(0, 2, 1) for x in dist_out], dim=1)
-                        val_loss_batch, loss_dict_val, _ = criterion(pred_distri, pred_scores, batch, feats=feats)
-                    _device_synchronize(self.device)
-                    val_step_time += time.perf_counter() - step_start
-
-                    running_val_loss += val_loss_batch.item()
-                    loss_box_val += loss_dict_val[0]
-                    loss_cls_val += loss_dict_val[1]
-                    loss_dfl_val += loss_dict_val[2]
-
-                    val_pbar.set_postfix(val_loss=val_loss_batch.item())
+                val_pbar = tqdm(val_loader, desc=f"Epoch {epoch} 🧪 Validation", unit="batch")
+                with torch.no_grad():
                     batch_wait_start = time.perf_counter()
+                    for imgs, targets, res_keys in val_pbar:
+                        if hasattr(self, "res_keys") and res_keys is not None and tuple(res_keys) != tuple(self.res_keys):
+                            raise ValueError(
+                                f"Validation batch resolution order mismatch: dataset returned {tuple(res_keys)}, "
+                                f"model expects {tuple(self.res_keys)}."
+                            )
+                        batch_ready_time = time.perf_counter()
+                        val_data_time += batch_ready_time - batch_wait_start
 
-            n_val_batches = max(1, len(val_loader))
-            val_loss = running_val_loss / n_val_batches
-            loss_box_val /= n_val_batches
-            loss_cls_val /= n_val_batches
-            loss_dfl_val  /= n_val_batches
+                        step_start = time.perf_counter()
+                        imgs = _move_imgs_to_device(imgs, self.device, non_blocking=pin_memory)
+
+                        targets = _to_device(targets, self.device)
+                        batch = {
+                            "batch_idx": targets[:, 0].long(),
+                            "cls": targets[:, 1].unsqueeze(1).long(),
+                            "bboxes": targets[:, 2:6],
+                            "snr": targets[:, 6].unsqueeze(1)
+                        }
+
+                        with _autocast_context(self.device, amp_enabled):
+                            dist_out, clsobj_out = self(imgs)
+                            feats = dist_out
+                            pred_scores = torch.cat([x.flatten(2).permute(0, 2, 1) for x in clsobj_out], dim=1)
+                            pred_distri = torch.cat([x.flatten(2).permute(0, 2, 1) for x in dist_out], dim=1)
+                            val_loss_batch, loss_dict_val, _ = criterion(pred_distri, pred_scores, batch, feats=feats)
+                        _device_synchronize(self.device)
+                        val_step_time += time.perf_counter() - step_start
+
+                        running_val_loss += val_loss_batch.item()
+                        loss_box_val += loss_dict_val[0]
+                        loss_cls_val += loss_dict_val[1]
+                        loss_dfl_val += loss_dict_val[2]
+
+                        val_pbar.set_postfix(val_loss=val_loss_batch.item())
+                        batch_wait_start = time.perf_counter()
+
+                n_val_batches = max(1, len(val_loader))
+                val_loss = running_val_loss / n_val_batches
+                loss_box_val /= n_val_batches
+                loss_cls_val /= n_val_batches
+                loss_dfl_val  /= n_val_batches
 
             monitor_value = None
             if monitor == "val_loss":
                 monitor_value = val_loss
+            elif monitor == "train_loss":
+                monitor_value = train_loss
 
             should_run_full_eval = (
                 run_full_eval
+                and
+                validate
                 and (
                     (epoch % full_eval_every == 0)
                     or (epoch == epochs)
@@ -665,6 +694,18 @@ class BaseModel(nn.Module):
                 else:
                     is_best_monitor = monitor_value > self._best_monitor_value
 
+            improved_for_early_stop = False
+            if monitor_value is not None:
+                if monitor_mode == "min":
+                    improved_for_early_stop = monitor_value < best_monitor_value
+                else:
+                    improved_for_early_stop = monitor_value > best_monitor_value
+                if improved_for_early_stop:
+                    best_monitor_value = float(monitor_value)
+                    epochs_without_improvement = 0
+                else:
+                    epochs_without_improvement += 1
+
             print(
                 f"📉 Summary Epoch {epoch:02d} | "
                 f"Train: {train_loss:.4f} (box={loss_box_train:.3f}, cls={loss_cls_train:.3f}, dfl={loss_dfl_train:.3f}) | "
@@ -682,33 +723,41 @@ class BaseModel(nn.Module):
             )
 
             # ---------- Logging CSV (colonnes de base + extras EvalRunner) ----------
-            logger.log(
-                epoch=epoch,
-                train_loss=float(train_loss), val_loss=float(val_loss),
-                loss_box_train=float(loss_box_train), loss_cls_train=float(loss_cls_train), loss_dfl_train=float(loss_dfl_train),
-                loss_box_val=float(loss_box_val),     loss_cls_val=float(loss_cls_val),     loss_dfl_val=float(loss_dfl_val),
-                extra_headers=result["extra_headers"],
-                extra_values=result["extra_values"],
-            )
+            if logger is not None:
+                logger.log(
+                    epoch=epoch,
+                    train_loss=float(train_loss), val_loss=float(val_loss),
+                    loss_box_train=float(loss_box_train), loss_cls_train=float(loss_cls_train), loss_dfl_train=float(loss_dfl_train),
+                    loss_box_val=float(loss_box_val),     loss_cls_val=float(loss_cls_val),     loss_dfl_val=float(loss_dfl_val),
+                    extra_headers=result["extra_headers"],
+                    extra_values=result["extra_values"],
+                )
 
             # --- CHECKPOINT & PLOTS ---
             if (epoch % save_last_every == 0) or (epoch == epochs):
                 torch.save(self.state_dict(), last_path)
 
-            if (epoch % plot_every == 0) or (epoch == epochs):
+            if (not minimal_outputs) and ((epoch % plot_every == 0) or (epoch == epochs)):
                 TrainingPlots.plot_losses(log_path, save_path=os.path.join(self.output_dir, "loss_curves.png"))
                 if run_full_eval:
                     TrainingPlots.plot_maps(log_path,   save_path=os.path.join(self.output_dir, "map_curves.png"))
                     TrainingPlots.plot_avg_recalls(log_path, save_path=os.path.join(self.output_dir, "avg_recall_curves.png"))
+                    TrainingPlots.plot_size_recalls(log_path, save_path=os.path.join(self.output_dir, "recall_size_curves.png"))
+                    TrainingPlots.plot_box_iou(log_path, save_path=os.path.join(self.output_dir, "box_iou_curves.png"))
 
-            if is_best_monitor:
+            if is_best_monitor and not minimal_outputs:
                 self._best_monitor_value = monitor_value
                 torch.save(self.state_dict(), best_path)
                 print(f"💾 Best model ({monitor}={monitor_value:.4f}) saved.")
 
-            if should_stop_early_from_csv(log_path, patience=patience, monitor=monitor, mode=monitor_mode):
-                print(f"⛔️ Early stopping déclenché sur {monitor} (aucune amélioration ≥ {patience} epochs).")
-                break
+            if minimal_outputs:
+                if epochs_without_improvement >= int(patience):
+                    print(f"⛔️ Early stopping déclenché sur {monitor} (aucune amélioration ≥ {patience} epochs).")
+                    break
+            else:
+                if should_stop_early_from_csv(log_path, patience=patience, monitor=monitor, mode=monitor_mode):
+                    print(f"⛔️ Early stopping déclenché sur {monitor} (aucune amélioration ≥ {patience} epochs).")
+                    break
 
         print("✅ Entraînement terminé.")
 

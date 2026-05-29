@@ -342,6 +342,8 @@ class YOLOv11P3RTDETR(YOLOv11P3Direct):
                 TrainingPlots.plot_losses(str(log_path), save_path=str(output_dir / "loss_curves.png"))
                 TrainingPlots.plot_maps(str(log_path), save_path=str(output_dir / "map_curves.png"))
                 TrainingPlots.plot_avg_recalls(str(log_path), save_path=str(output_dir / "avg_recall_curves.png"))
+                TrainingPlots.plot_size_recalls(str(log_path), save_path=str(output_dir / "recall_size_curves.png"))
+                TrainingPlots.plot_box_iou(str(log_path), save_path=str(output_dir / "box_iou_curves.png"))
             if bad_epochs >= int(patience):
                 print(f"Early stopping on val_loss after {bad_epochs} epochs without improvement.")
                 break

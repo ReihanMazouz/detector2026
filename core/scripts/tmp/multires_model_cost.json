@@ -1,0 +1,167 @@
+{
+  "device": "cpu",
+  "batch_size": 1,
+  "model_family": "MR_YOLO",
+  "model_kwargs": {
+    "num_classes": 15,
+    "width_mult": 0.25,
+    "reg_max": 16,
+    "in_ch": 1,
+    "backbone_mode": "TFSep_pyramid",
+    "outfusion_channels_mult": 1
+  },
+  "results": [
+    {
+      "label": "mr_1",
+      "num_resolutions": 1,
+      "resolutions": [
+        [
+          256,
+          256
+        ]
+      ],
+      "resolution_label": "256x256",
+      "batch_size": 1,
+      "params": 2129037,
+      "flops": 1751372096,
+      "params_human": "2.13M",
+      "flops_human": "1.75G"
+    },
+    {
+      "label": "mr_2",
+      "num_resolutions": 2,
+      "resolutions": [
+        [
+          128,
+          512
+        ],
+        [
+          512,
+          128
+        ]
+      ],
+      "resolution_label": "128x512, 512x128",
+      "batch_size": 1,
+      "params": 2190221,
+      "flops": 2155274880,
+      "params_human": "2.19M",
+      "flops_human": "2.16G"
+    },
+    {
+      "label": "mr_3",
+      "num_resolutions": 3,
+      "resolutions": [
+        [
+          128,
+          512
+        ],
+        [
+          256,
+          256
+        ],
+        [
+          512,
+          128
+        ]
+      ],
+      "resolution_label": "128x512, 256x256, 512x128",
+      "batch_size": 1,
+      "params": 2256237,
+      "flops": 2418947008,
+      "params_human": "2.26M",
+      "flops_human": "2.42G"
+    },
+    {
+      "label": "mr_5",
+      "num_resolutions": 5,
+      "resolutions": [
+        [
+          64,
+          1024
+        ],
+        [
+          128,
+          512
+        ],
+        [
+          256,
+          256
+        ],
+        [
+          512,
+          128
+        ],
+        [
+          1024,
+          64
+        ]
+      ],
+      "resolution_label": "64x1024, 128x512, 256x256, 512x128, 1024x64",
+      "batch_size": 1,
+      "params": 2438477,
+      "flops": 3213493824,
+      "params_human": "2.44M",
+      "flops_human": "3.21G"
+    },
+    {
+      "label": "mr_7",
+      "num_resolutions": 7,
+      "resolutions": [
+        [
+          32,
+          2048
+        ],
+        [
+          64,
+          1024
+        ],
+        [
+          128,
+          512
+        ],
+        [
+          256,
+          256
+        ],
+        [
+          512,
+          128
+        ],
+        [
+          1024,
+          64
+        ],
+        [
+          2048,
+          32
+        ]
+      ],
+      "resolution_label": "32x2048, 64x1024, 128x512, 256x256, 512x128, 1024x64, 2048x32",
+      "batch_size": 1,
+      "params": 2675757,
+      "flops": 4419651776,
+      "params_human": "2.68M",
+      "flops_human": "4.42G"
+    },
+    {
+      "label": "mr_2_far_gap_2_pow_5",
+      "num_resolutions": 2,
+      "resolutions": [
+        [
+          64,
+          1024
+        ],
+        [
+          1024,
+          64
+        ]
+      ],
+      "resolution_label": "64x1024, 1024x64",
+      "batch_size": 1,
+      "params": 2196109,
+      "flops": 2146980480,
+      "params_human": "2.20M",
+      "flops_human": "2.15G"
+    }
+  ]
+}

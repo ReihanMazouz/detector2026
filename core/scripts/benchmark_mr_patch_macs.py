@@ -1,5 +1,5 @@
 """Compare MACs and parameters between MRPatchBackboneYOLOOne2ManyHead and
-MRPatchMultiScaleRTDETRHead.
+MRPatchMultiResRTDETRHead.
 
 Usage:
     python benchmark_mr_patch_macs.py [--device cpu] [--batch-size 1]
@@ -64,7 +64,7 @@ sys.path.insert(0, REPO_ROOT)
 
 from detector2026.core.models.mr_yolo_ablation import (  # noqa: E402
     MRPatchBackboneYOLOOne2ManyHead,
-    MRPatchMultiScaleRTDETRHead,
+    MRPatchMultiResRTDETRHead,
 )
 from detector2026.core.models.Head.rtdetr import MSDeformAttn, RTDETRDecoderLayer  # noqa: E402
 from detector2026.core.models.mr_yolo_ablation.mr_patch_backbone_yolo_one2many_head import (  # noqa: E402
@@ -227,7 +227,6 @@ def _common_kwargs(input_resolutions, in_ch):
         in_ch=in_ch,
         d_model=DEFAULT_D_MODEL,
         patch_size=DEFAULT_PATCH_SIZE,
-        num_encoder_layers=DEFAULT_ENCODER_LAYERS,
         num_intra_points=DEFAULT_NUM_INTRA_POINTS,
         num_inter_neighbors=DEFAULT_NUM_INTER_NEIGHBORS,
         dropout=0.0,
@@ -238,6 +237,7 @@ def build_yolo_one2many(resolutions, device, in_ch):
     with contextlib.redirect_stdout(io.StringIO()):
         model = MRPatchBackboneYOLOOne2ManyHead(
             **_common_kwargs(resolutions, in_ch),
+            num_encoder_layers=DEFAULT_ENCODER_LAYERS,
             num_heads=DEFAULT_NUM_HEADS_BACKBONE,
             dim_feedforward=DEFAULT_DIM_FFN_BACKBONE,
             p3_hw=DEFAULT_P3_HW,
@@ -247,27 +247,52 @@ def build_yolo_one2many(resolutions, device, in_ch):
     return model.eval()
 
 
-def build_multiscale_rtdetr(resolutions, device, in_ch):
+def build_multires_rtdetr(
+    resolutions,
+    device,
+    in_ch,
+    num_encoder_layers: int = DEFAULT_ENCODER_LAYERS,
+    num_decoder_layers: int = DEFAULT_NUM_DECODER_LAYERS,
+    num_decoder_points: int = DEFAULT_NUM_DECODER_POINTS,
+    num_heads_decoder: int = DEFAULT_NUM_HEADS_DECODER,
+):
     with contextlib.redirect_stdout(io.StringIO()):
-        model = MRPatchMultiScaleRTDETRHead(
+        model = MRPatchMultiResRTDETRHead(
             **_common_kwargs(resolutions, in_ch),
+            num_encoder_layers=num_encoder_layers,
             num_heads_backbone=DEFAULT_NUM_HEADS_BACKBONE,
             dim_feedforward_backbone=DEFAULT_DIM_FFN_BACKBONE,
             device=device,
             hidden_dim=DEFAULT_HIDDEN_DIM,
             num_queries=DEFAULT_NUM_QUERIES,
-            num_decoder_layers=DEFAULT_NUM_DECODER_LAYERS,
-            num_heads_decoder=DEFAULT_NUM_HEADS_DECODER,
-            num_decoder_points=DEFAULT_NUM_DECODER_POINTS,
+            num_decoder_layers=num_decoder_layers,
+            num_heads_decoder=num_heads_decoder,
+            num_decoder_points=num_decoder_points,
             dim_feedforward_decoder=DEFAULT_DIM_FFN_DECODER,
         )
     return model.eval()
 
 
+# ── sweep configurations ──────────────────────────────────────────────────────
+
+# (label, enc_layers, dec_layers, dec_points, dec_heads)
+SWEEP_CONFIGS = [
+    # reference: original YOLO one2many with fused 32×32  (built separately)
+    # MultiRes RT-DETR configs
+    ("MR-RTDETR  enc3 dec2 pts8  h8",  3, 2,  8, 8),
+    ("MR-RTDETR  enc4 dec2 pts8  h8",  4, 2,  8, 8),
+    ("MR-RTDETR  enc4 dec3 pts8  h8",  4, 3,  8, 8),
+    ("MR-RTDETR  enc4 dec4 pts8  h8",  4, 4,  8, 8),
+    ("MR-RTDETR  enc4 dec2 pts16 h8",  4, 2, 16, 8),
+    ("MR-RTDETR  enc4 dec4 pts16 h8",  4, 4, 16, 8),
+    ("MR-RTDETR  enc4 dec4 pts8  h4",  4, 4,  8, 4),
+]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Compare MACs of MR patch backbone models.")
+    parser = argparse.ArgumentParser(description="Sweep MACs across MR patch backbone configs.")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--in-ch", type=int, default=1)
@@ -286,42 +311,52 @@ def main():
     token_counts = [h * w for h, w in patch_shapes]
     print(f"Patch grids       : {patch_shapes}")
     print(f"Tokens per res    : {token_counts}  total={sum(token_counts)}")
-    print(f"Batch size        : {batch}  |  device: {args.device}")
+    print(f"Batch size        : {batch}  |  device: {args.device}\n")
 
     inputs = tuple(
         torch.zeros(batch, in_ch, h, w, device=args.device)
         for h, w in resolutions
     )
 
-    # ── model A ──────────────────────────────────────────────────────────────
-    model_a = build_yolo_one2many(resolutions, args.device, in_ch)
-    result_a = _profile("MRPatchBackboneYOLOOne2ManyHead (YOLO head, fused 32×32)", model_a, inputs)
-    del model_a
+    results = []
 
-    # ── model B ──────────────────────────────────────────────────────────────
-    model_b = build_multiscale_rtdetr(resolutions, args.device, in_ch)
-    result_b = _profile("MRPatchMultiScaleRTDETRHead (RT-DETR head, no fusion)", model_b, inputs)
-    del model_b
+    # reference YOLO one2many
+    model_ref = build_yolo_one2many(resolutions, args.device, in_ch)
+    r_ref = _profile("YOLO-one2many  enc3 fused-32×32  (reference)", model_ref, inputs)
+    del model_ref
+    results.append(r_ref)
 
-    # ── comparison ───────────────────────────────────────────────────────────
-    print(f"\n{'═'*60}")
-    print("  COMPARISON")
-    print(f"{'═'*60}")
-    header = f"  {'Model':<42}  {'Params':>10}  {'MACs':>12}"
-    print(header)
-    print(f"  {'-'*42}  {'-'*10}  {'-'*12}")
-    for r in (result_a, result_b):
-        print(f"  {r['name']:<42}  {_human(r['params']):>10}  {_human(r['macs']):>12}")
+    # sweep
+    for label, enc, dec, pts, heads in SWEEP_CONFIGS:
+        model = build_multires_rtdetr(resolutions, args.device, in_ch,
+                                        num_encoder_layers=enc,
+                                        num_decoder_layers=dec,
+                                        num_decoder_points=pts,
+                                        num_heads_decoder=heads)
+        r = _profile(label, model, inputs)
+        del model
+        results.append(r)
 
-    ratio_macs = result_b["macs"] / result_a["macs"] if result_a["macs"] else float("nan")
-    ratio_params = result_b["params"] / result_a["params"] if result_a["params"] else float("nan")
-    print(f"\n  MACs  ratio  (B / A) : {ratio_macs:.3f}×")
-    print(f"  Param ratio  (B / A) : {ratio_params:.3f}×")
+    # ── summary table ─────────────────────────────────────────────────────────
+    ref_macs = results[0]["macs"]
+    ref_params = results[0]["params"]
 
-    print(f"\n  Breakdown of extra MACs (B):")
-    print(f"    thop (conv/linear)  : {_human(result_b['macs_thop'])}")
-    print(f"    attention hooks     : {_human(result_b['macs_extra'])}")
-    print(f"    (same breakdown A)  : thop={_human(result_a['macs_thop'])}  hooks={_human(result_a['macs_extra'])}")
+    col_name  = 46
+    col_num   = 10
+    sep = f"  {'─'*col_name}  {'─'*col_num}  {'─'*col_num}  {'─'*8}  {'─'*8}"
+
+    print(f"\n{'═'*90}")
+    print("  SWEEP SUMMARY")
+    print(f"{'═'*90}")
+    print(f"  {'Configuration':<{col_name}}  {'Params':>{col_num}}  {'MACs':>{col_num}}  {'Δ MACs':>8}  {'Δ Params':>8}")
+    print(sep)
+    for r in results:
+        delta_macs   = f"+{(r['macs']   - ref_macs)   / 1e6:.0f} M"   if r["macs"]   != ref_macs   else "—"
+        delta_params = f"+{(r['params'] - ref_params) / 1e6:.2f} M" if r["params"] != ref_params else "—"
+        print(f"  {r['name']:<{col_name}}  {_human(r['params']):>{col_num}}  {_human(r['macs']):>{col_num}}  {delta_macs:>8}  {delta_params:>8}")
+
+    print(f"\n  Note: Δ is relative to the YOLO reference.")
+    print(f"  Encoder cost  ≈ {_human(ref_macs)} (dominates in all configs)")
 
 
 if __name__ == "__main__":

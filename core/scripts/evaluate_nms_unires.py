@@ -49,7 +49,7 @@ OUTPUT_DIR = Path("/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/
 MODEL_SPECS = [
     {
         "label": "cfg512",
-        "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_512/best.pt",
+        "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_cfg512/best.pt",
         "res_key": "cfg512",
         "res_hw": (256, 256),
     },
@@ -242,7 +242,7 @@ def _run_one_model_on_one_sample(
     raw_tensor = _pick_tensor_for_resolution(raw_tensors, tuple(spec["res_hw"]))
 
     preprocess = build_preprocessor(PREPROCESSING)
-    image = preprocess(raw_tensor, cfg_key=spec["res_key"]).unsqueeze(0).to(model.device)
+    image = preprocess(raw_tensor, cfg_key=spec["res_key"]).unsqueeze(0).to(model.device, dtype=torch.float32)
 
     with torch.no_grad():
         dist_out, cls_out = model(image)

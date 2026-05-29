@@ -1,0 +1,15 @@
+[
+  {
+    "model": "YOLOv11_NoNeck_ScaleDeformableDecoder",
+    "params": 6017452,
+    "params_human": "6.02M",
+    "thop_params": 4176788,
+    "thop_macs": 669147136,
+    "extra_attention_macs": 34037760,
+    "macs": 703184896,
+    "macs_human": "703.18M",
+    "flops": 1406369792,
+    "flops_human": "1.41G",
+    "input": "1x1x256x256"
+  }
+]

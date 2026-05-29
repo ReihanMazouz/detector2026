@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 import numpy as np
 import torch
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")))
 
 from detector2026.core.models.yolov11 import YOLOv11
 from detector2026.core.utils.analysing_results import analyse_results, stats_analysis_with_metrics
@@ -22,22 +22,24 @@ from detector2026.core.utils.preprocess import build_preprocessor
 # PARAMETRES EN DUR
 # =====================================================================
 
-DATASET_PATH = Path("/data/RAWSIM/RMA/rf_dataset_thesis")
+DATASET_PATH = Path(
+    "/Users/tailleesarah/Documents/thèse/icml/ICML2026DataSimulator/examples/output/rf_thesis_dataset"
+)
 SPLIT = "val"
-DEVICE = "cuda:0"
+DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
 MODEL_SPECS = [
     {
         "label": "cfg512",
-        "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_512/best.pt",
+        "checkpoint": "/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/examples_of_training/yolov11n_specificres_cfg512/best.pt",
         "res_key": "cfg512",
         "res_hw": (256, 256),
     },
     {
         "label": "cfg256",
-        "checkpoint": "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_256/best.pt",
+        "checkpoint": "/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/examples_of_training/yolov11n_specificres_cfg256/best.pt",
         "res_key": "cfg256",
-        "res_hw": (128, 128),
+        "res_hw": (128, 512),
     },
 ]
 
@@ -161,12 +163,34 @@ def _pick_tensor_for_resolution(raw_tensors: Sequence[torch.Tensor], res_hw: Tup
     raise ValueError(f"Aucun tenseur de taille {res_hw} trouve dans le sample.")
 
 
+def _cfg_labels_from_label_items(items: List[Dict[str, Any]], spectra_len: int) -> List[str]:
+    if items:
+        psnr = items[0].get("psnr")
+        if isinstance(psnr, dict) and psnr:
+            keys = list(psnr.keys())
+            if len(keys) == spectra_len:
+                return [str(key) for key in keys]
+    return [f"cfg{index}" for index in range(spectra_len)]
+
+
+def _pick_tensor_for_spec(raw_tensors: Sequence[torch.Tensor], label_path: Path, spec: Dict[str, Any]) -> torch.Tensor:
+    items = load_label_items(label_path)
+    cfg_labels = _cfg_labels_from_label_items(items, len(raw_tensors))
+    res_key = str(spec["res_key"])
+    if res_key in cfg_labels:
+        tensor = raw_tensors[cfg_labels.index(res_key)]
+        if tensor.ndim == 2 or tensor.ndim == 3:
+            return tensor
+    return _pick_tensor_for_resolution(raw_tensors, tuple(spec["res_hw"]))
+
+
 def _run_model_on_sample(model: YOLOv11, spec: Dict[str, Any], sample_path: Path) -> torch.Tensor:
     raw_tensors = _load_raw_tensors(sample_path)
-    raw_tensor = _pick_tensor_for_resolution(raw_tensors, tuple(spec["res_hw"]))
+    label_path = DATASET_PATH / SPLIT / "labels_detect" / f"{sample_path.stem}.json"
+    raw_tensor = _pick_tensor_for_spec(raw_tensors, label_path, spec)
 
     preprocess = build_preprocessor(PREPROCESSING)
-    image = preprocess(raw_tensor, cfg_key=spec["res_key"]).unsqueeze(0).to(model.device)
+    image = preprocess(raw_tensor, cfg_key=spec["res_key"]).unsqueeze(0).to(model.device, dtype=torch.float32)
 
     with torch.no_grad():
         dist_out, cls_out = model(image)

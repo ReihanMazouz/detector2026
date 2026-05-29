@@ -568,6 +568,8 @@ class MRViTPatchDetector(BaseModel):
                 TrainingPlots.plot_losses(str(log_path), save_path=str(output_path / "loss_curves.png"))
                 TrainingPlots.plot_maps(str(log_path), save_path=str(output_path / "map_curves.png"))
                 TrainingPlots.plot_avg_recalls(str(log_path), save_path=str(output_path / "avg_recall_curves.png"))
+                TrainingPlots.plot_size_recalls(str(log_path), save_path=str(output_path / "recall_size_curves.png"))
+                TrainingPlots.plot_box_iou(str(log_path), save_path=str(output_path / "box_iou_curves.png"))
 
             if bad_epochs >= int(patience):
                 print(f"Early stopping after {bad_epochs} epochs without improvement.")

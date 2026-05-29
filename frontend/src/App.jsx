@@ -71,7 +71,7 @@ const EVALUATION_METRICS = [
 
 const DEFAULT_EVALUATION_RUN_INPUTS = [
   {
-    path: "/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/examples_of_training/tf_attn_yolon_specificres",
+    path: "/Users/tailleesarah/Documents/thèse/icml/detector2026/runs/examples_of_training/tf_attn_yolon_specificres_cfg512",
     label: "TF Attn YOLOn",
   },
   {
@@ -2112,7 +2112,7 @@ function EvaluationPage({ apiFetch }) {
                   apiFetch={apiFetch}
                   pickerKind="directory"
                   pickerTitle="Choisir un dossier de run"
-                  placeholder="/Users/.../runs/examples_of_training/tf_attn_yolon_specificres"
+                  placeholder="/Users/.../runs/examples_of_training/tf_attn_yolon_specificres_cfg512"
                 />
                 <label className="field">
                   <span>Label du plot</span>

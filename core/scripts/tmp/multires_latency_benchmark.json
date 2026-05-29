@@ -1,0 +1,213 @@
+{
+  "metadata": {
+    "device": "cpu",
+    "device_name": "CPU",
+    "batch_size": 1,
+    "warmup": 1,
+    "iters": 2,
+    "torch_version": "2.7.1",
+    "num_threads": 12
+  },
+  "results": [
+    {
+      "label": "mr_1",
+      "num_resolutions": 1,
+      "resolutions": [
+        [
+          256,
+          256
+        ]
+      ],
+      "resolution_label": "256x256",
+      "total_input_pixels": 65536,
+      "forward_ms": {
+        "mean_ms": 211.1521459883079,
+        "std_ms": 33.16614602226764,
+        "min_ms": 177.98599996604025,
+        "max_ms": 244.31829201057553
+      },
+      "forward_plus_postprocess_ms": {
+        "mean_ms": 323.4712915145792,
+        "std_ms": 61.94470851914957,
+        "min_ms": 261.52658299542964,
+        "max_ms": 385.4160000337288
+      }
+    },
+    {
+      "label": "mr_2",
+      "num_resolutions": 2,
+      "resolutions": [
+        [
+          128,
+          512
+        ],
+        [
+          512,
+          128
+        ]
+      ],
+      "resolution_label": "128x512, 512x128",
+      "total_input_pixels": 131072,
+      "forward_ms": {
+        "mean_ms": 280.6780625251122,
+        "std_ms": 63.58772952808067,
+        "min_ms": 217.0903329970315,
+        "max_ms": 344.26579205319285
+      },
+      "forward_plus_postprocess_ms": {
+        "mean_ms": 279.29785405285656,
+        "std_ms": 46.94272903725505,
+        "min_ms": 232.35512501560152,
+        "max_ms": 326.2405830901116
+      }
+    },
+    {
+      "label": "mr_3",
+      "num_resolutions": 3,
+      "resolutions": [
+        [
+          128,
+          512
+        ],
+        [
+          256,
+          256
+        ],
+        [
+          512,
+          128
+        ]
+      ],
+      "resolution_label": "128x512, 256x256, 512x128",
+      "total_input_pixels": 196608,
+      "forward_ms": {
+        "mean_ms": 304.97464595828205,
+        "std_ms": 33.95193803589791,
+        "min_ms": 271.02270792238414,
+        "max_ms": 338.92658399417996
+      },
+      "forward_plus_postprocess_ms": {
+        "mean_ms": 300.27481203433126,
+        "std_ms": 34.41664599813521,
+        "min_ms": 265.85816603619605,
+        "max_ms": 334.69145803246647
+      }
+    },
+    {
+      "label": "mr_5",
+      "num_resolutions": 5,
+      "resolutions": [
+        [
+          64,
+          1024
+        ],
+        [
+          128,
+          512
+        ],
+        [
+          256,
+          256
+        ],
+        [
+          512,
+          128
+        ],
+        [
+          1024,
+          64
+        ]
+      ],
+      "resolution_label": "64x1024, 128x512, 256x256, 512x128, 1024x64",
+      "total_input_pixels": 327680,
+      "forward_ms": {
+        "mean_ms": 721.7128744814545,
+        "std_ms": 79.08679149113595,
+        "min_ms": 642.6260829903185,
+        "max_ms": 800.7996659725904
+      },
+      "forward_plus_postprocess_ms": {
+        "mean_ms": 481.92754201591015,
+        "std_ms": 0.7391669787466526,
+        "min_ms": 481.1883750371635,
+        "max_ms": 482.6667089946568
+      }
+    },
+    {
+      "label": "mr_7",
+      "num_resolutions": 7,
+      "resolutions": [
+        [
+          32,
+          2048
+        ],
+        [
+          64,
+          1024
+        ],
+        [
+          128,
+          512
+        ],
+        [
+          256,
+          256
+        ],
+        [
+          512,
+          128
+        ],
+        [
+          1024,
+          64
+        ],
+        [
+          2048,
+          32
+        ]
+      ],
+      "resolution_label": "32x2048, 64x1024, 128x512, 256x256, 512x128, 1024x64, 2048x32",
+      "total_input_pixels": 458752,
+      "forward_ms": {
+        "mean_ms": 674.2748335236683,
+        "std_ms": 64.84445848036557,
+        "min_ms": 609.4303750433028,
+        "max_ms": 739.1192920040339
+      },
+      "forward_plus_postprocess_ms": {
+        "mean_ms": 659.0311045292765,
+        "std_ms": 38.32518751733005,
+        "min_ms": 620.7059170119464,
+        "max_ms": 697.3562920466065
+      }
+    },
+    {
+      "label": "mr_2_far_gap_2_pow_5",
+      "num_resolutions": 2,
+      "resolutions": [
+        [
+          64,
+          1024
+        ],
+        [
+          1024,
+          64
+        ]
+      ],
+      "resolution_label": "64x1024, 1024x64",
+      "total_input_pixels": 131072,
+      "forward_ms": {
+        "mean_ms": 286.7116460110992,
+        "std_ms": 37.47639595530927,
+        "min_ms": 249.23525005578995,
+        "max_ms": 324.1880419664085
+      },
+      "forward_plus_postprocess_ms": {
+        "mean_ms": 271.7743539833464,
+        "std_ms": 34.097853989806026,
+        "min_ms": 237.67649999354035,
+        "max_ms": 305.8722079731524
+      }
+    }
+  ]
+}

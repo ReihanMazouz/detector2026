@@ -447,3 +447,50 @@ class TrainingPlots:
             ax.set_ylim(-0.02, 1.02)
             TrainingPlots._export(fig, save_path)
             plt.close(fig)
+
+    @staticmethod
+    def plot_size_recalls(csv_path: str, save_path: str, use_tex: bool = False):
+        e_small,  v_small  = TrainingPlots._read_column(csv_path, "recall_small")
+        e_medium, v_medium = TrainingPlots._read_column(csv_path, "recall_medium")
+        e_large,  v_large  = TrainingPlots._read_column(csv_path, "recall_large")
+
+        with TrainingPlots.paper_style(use_tex=use_tex):
+            fig, ax = plt.subplots()
+            def _me(vals): return max(1, len(vals) // 10)
+            if e_small and v_small:
+                ax.plot(e_small, v_small, label="Recall small",
+                        marker="o", markersize=3.2, markevery=_me(v_small), solid_capstyle="round")
+            if e_medium and v_medium:
+                ax.plot(e_medium, v_medium, label="Recall medium",
+                        linestyle="--", marker="s", markersize=3.0, markevery=_me(v_medium), solid_capstyle="round")
+            if e_large and v_large:
+                ax.plot(e_large, v_large, label="Recall large",
+                        linestyle="-.", marker="^", markersize=3.2, markevery=_me(v_large), solid_capstyle="round")
+
+            TrainingPlots._apply_ax_style(ax, xlabel="Epoch", ylabel="Recall",
+                                          title="Recall per object size")
+            ax.set_ylim(-0.02, 1.02)
+            TrainingPlots._export(fig, save_path)
+            plt.close(fig)
+
+    @staticmethod
+    def plot_box_iou(csv_path: str, save_path: str, use_tex: bool = False):
+        epochs, values = TrainingPlots._read_column(csv_path, "box_iou_mean")
+
+        with TrainingPlots.paper_style(use_tex=use_tex):
+            fig, ax = plt.subplots()
+            def _me(vals): return max(1, len(vals) // 10)
+            if epochs and values:
+                ax.plot(
+                    epochs,
+                    values,
+                    label="Mean TP IoU",
+                    marker="o",
+                    markersize=3.2,
+                    markevery=_me(values),
+                    solid_capstyle="round",
+                )
+            TrainingPlots._apply_ax_style(ax, xlabel="Epoch", ylabel="Mean IoU", title="Mean TP IoU vs Epochs")
+            ax.set_ylim(-0.02, 1.02)
+            TrainingPlots._export(fig, save_path)
+            plt.close(fig)

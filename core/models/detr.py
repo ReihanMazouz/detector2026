@@ -390,6 +390,8 @@ class DETR(BaseModel):
             if run_full_eval and should_eval:
                 TrainingPlots.plot_maps(str(output_dir / "train_log.csv"), save_path=str(output_dir / "map_curves.png"))
                 TrainingPlots.plot_avg_recalls(str(output_dir / "train_log.csv"), save_path=str(output_dir / "avg_recall_curves.png"))
+                TrainingPlots.plot_size_recalls(str(output_dir / "train_log.csv"), save_path=str(output_dir / "recall_size_curves.png"))
+                TrainingPlots.plot_box_iou(str(output_dir / "train_log.csv"), save_path=str(output_dir / "box_iou_curves.png"))
 
             monitor_value = val_loss
             if monitor == "map50":

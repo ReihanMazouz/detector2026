@@ -65,6 +65,37 @@ def _persist_run_state(run: Dict[str, Any]) -> None:
     output_dir = Path(run["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    training = dict(run.get("training", {}))
+    model_config = dict(run.get("model_config", {}))
+    dataset_mode = str(training.get("dataset_mode", "fused"))
+    data_loading: Dict[str, Any] = {
+        "dataset_mode": dataset_mode,
+        "preprocessing": str(training.get("preprocessing", "spectrogram_psnr")),
+        "preprocessing_kwargs": dict(training.get("preprocessing_kwargs", {}))
+        if isinstance(training.get("preprocessing_kwargs"), dict)
+        else {},
+    }
+    if dataset_mode == "specificres":
+        data_loading["dataloader"] = "YOLODatasetSpecificRes"
+        data_loading["select_res"] = {
+            "res_key": str(model_config.get("res_key", "cfg512")),
+            "res_hw": [
+                int(model_config.get("res_hw", [256, 256])[0]),
+                int(model_config.get("res_hw", [256, 256])[1]),
+            ],
+        }
+    elif dataset_mode == "singleres":
+        data_loading["dataloader"] = "YOLODatasetSingleRes"
+        data_loading["select_res"] = {
+            "res_key": str(model_config.get("res_key", "cfg512")),
+            "res_hw": [
+                int(model_config.get("res_hw", [256, 256])[0]),
+                int(model_config.get("res_hw", [256, 256])[1]),
+            ],
+        }
+    else:
+        data_loading["dataloader"] = "YOLODatasetFusedMultiRes"
+
     config_payload = {
         "run_id": run["run_id"],
         "run_name": run["run_name"],
@@ -74,6 +105,7 @@ def _persist_run_state(run: Dict[str, Any]) -> None:
         "output_dir": run["output_dir"],
         "training": run["training"],
         "model_config": run["model_config"],
+        "data_loading": data_loading,
         "created_at": run["created_at"],
     }
     status_payload = {

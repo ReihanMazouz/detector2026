@@ -23,7 +23,7 @@ from detector2026.core.utils.preprocess import build_preprocessor
 # =====================================================================
 
 CHECKPOINT_PATH = Path(
-    "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_512/best.pt"
+    "/data/RAWSIM/RMA/Thesis_work/yolo_perso/training_folder/rf_dataset_thesis/yolov11n_specificres_cfg512/best.pt"
 )
 DATASET_PATH = Path(
     "/data/RAWSIM/RMA/rf_dataset_thesis"
@@ -157,7 +157,7 @@ def _run_model_on_sample(model: YOLOv11, sample_path: Path) -> torch.Tensor:
     raw_tensor = _pick_tensor_for_resolution(raw_tensors)
 
     preprocess = build_preprocessor(PREPROCESSING)
-    image = preprocess(raw_tensor, cfg_key=RES_KEY).unsqueeze(0).to(model.device)
+    image = preprocess(raw_tensor, cfg_key=RES_KEY).unsqueeze(0).to(model.device, dtype=torch.float32)
 
     with torch.no_grad():
         dist_out, cls_out = model(image)

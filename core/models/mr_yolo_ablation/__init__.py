@@ -4,7 +4,7 @@ from .mr_patch_backbone_yolo_one2many_head import (
     MRPatchBackboneYOLOOne2ManyHead,
 )
 from .mr_patch_backbone_rtdetr_head import MRPatchBackboneRTDETRHead
-from .mr_patch_multiscale_rtdetr_head import MRPatchMultiScaleRTDETRHead
+from .mr_patch_multires_rtdetr_head import MRPatchMultiResRTDETRHead
 from .branch_cross_attention import (
     BranchCrossAttentionBackbone,
     MRYOLOBranchCrossAttentionAblation,
@@ -31,5 +31,5 @@ __all__ = [
     "MRViTPatchDetector",
     "IsotropicRestrictedPatchBackbone",
     "MRPatchBackboneRTDETRHead",
-    "MRPatchMultiScaleRTDETRHead",
+    "MRPatchMultiResRTDETRHead",
 ]
