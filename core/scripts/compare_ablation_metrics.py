@@ -20,7 +20,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 from detector2026.core.models.mr_yolo import MR_YOLO  # noqa: E402
 from detector2026.core.models.mr_yolo_ablation import (  # noqa: E402
+    MRPatchBackboneYOLOOne2ManyHead,
     MRYOLOBranchCrossAttentionAblation,
+    MRViTPatchDetector,
 )
 from detector2026.core.models.yolov11 import YOLOv11  # noqa: E402
 from detector2026.core.models.yolov11_ablation import (  # noqa: E402
@@ -687,6 +689,57 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
                 fusion_num_layers=1,
                 outfusion_channels_mult=2,
                 **mr_common,
+            ),
+        ),
+        EvalSpec(
+            "MRPatchBackboneYOLO_P3_One2Many",
+            "mr_yolo",
+            first_existing_ckpt(
+                ckpt(mr_root, "mr_patch_backbone_yolo_one2one_head"),
+                ckpt(mr_root, "mr_patch_backbone_yolo_one2many_head"),
+            ),
+            "fused",
+            lambda output_dir: MRPatchBackboneYOLOOne2ManyHead(
+                input_resolutions=input_resolutions,
+                output_dir=output_dir,
+                num_classes=args.num_classes,
+                reg_max=args.reg_max,
+                device=args.device,
+                in_ch=input_channels,
+                d_model=128,
+                patch_size=8,
+                num_encoder_layers=3,
+                num_heads=4,
+                num_intra_points=8,
+                num_inter_neighbors=8,
+                dim_feedforward=512,
+                dropout=0.0,
+                p3_hw=(32, 32),
+                stride=32,
+            ),
+        ),
+        EvalSpec(
+            "MRViTPatchDetector_RTDETR",
+            "one2one",
+            ckpt(mr_root, "mr_vit_patch_detector_rtdetr"),
+            "fused",
+            lambda output_dir: MRViTPatchDetector(
+                input_resolutions=input_resolutions,
+                output_dir=output_dir,
+                num_classes=args.num_classes,
+                device=args.device,
+                in_ch=input_channels,
+                d_model=256,
+                num_encoder_layers=6,
+                num_decoder_layers=6,
+                num_queries=100,
+                patch_grid_hw=(32, 32),
+                num_heads=8,
+                num_encoder_points=16,
+                num_decoder_points=16,
+                dim_feedforward=1024,
+                dropout=0.0,
+                matcher_num_threads=8,
             ),
         ),
     ]
