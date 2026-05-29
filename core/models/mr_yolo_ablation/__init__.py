@@ -3,6 +3,7 @@ from .mr_patch_backbone_yolo_one2many_head import (
     IsotropicRestrictedPatchBackbone,
     MRPatchBackboneYOLOOne2ManyHead,
 )
+from .mr_patch_backbone_rtdetr_head import MRPatchBackboneRTDETRHead
 from .branch_cross_attention import (
     BranchCrossAttentionBackbone,
     MRYOLOBranchCrossAttentionAblation,
@@ -28,4 +29,5 @@ __all__ = [
     "PatchSpatialAttentionBackbone",
     "MRViTPatchDetector",
     "IsotropicRestrictedPatchBackbone",
+    "MRPatchBackboneRTDETRHead",
 ]
