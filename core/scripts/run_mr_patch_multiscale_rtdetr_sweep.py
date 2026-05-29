@@ -1,10 +1,29 @@
+"""Sweep training script for MRPatchMultiScaleRTDETRHead with enc4.
+
+Trains multiple decoder configurations sequentially. Each run is saved in its
+own sub-directory under --output-root. All configurations use 4 encoder layers
+(enc4) — the 1-layer upgrade cost (~6.9 G MACs) is paid once; decoder layers
+are cheap (~140 M MACs each).
+
+Configurations (label, dec_layers, dec_pts, dec_heads):
+  enc4_dec2_pts8_h8   — minimal decoder (reference)
+  enc4_dec3_pts8_h8
+  enc4_dec4_pts8_h8   — max capacity at pts8
+  enc4_dec4_pts16_h8  — more sampling points
+  enc4_dec4_pts8_h4   — fewer heads (cheaper self-attn)
+
+Usage:
+    python run_mr_patch_multiscale_rtdetr_sweep.py [--dry-run] [--overwrite]
+"""
 from __future__ import annotations
 
 import argparse
 import gc
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import List, Tuple
 
 import torch
 
@@ -26,33 +45,34 @@ from detector2026.core.utils.preprocess import preprocessing_num_channels  # noq
 DEFAULT_OUTPUT_ROOT = (
     "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/mr_yolo_ablation"
 )
-DEFAULT_RUN_NAME = "mr_patch_multiscale_rtdetr_head_enc4_dec4"
 DEFAULT_BACKBONE_CHECKPOINT = (
     "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/"
     "mr_yolo_ablation/mr_patch_backbone_yolo_one2many_head/best.pt"
 )
 
+# (tag, num_encoder_layers, num_decoder_layers, num_decoder_points, num_heads_decoder)
+SWEEP_CONFIGS: List[Tuple[str, int, int, int, int]] = [
+    ("enc4_dec2_pts8_h8",  4, 2,  8, 8),
+    ("enc4_dec3_pts8_h8",  4, 3,  8, 8),
+    ("enc4_dec4_pts8_h8",  4, 4,  8, 8),
+    ("enc4_dec4_pts16_h8", 4, 4, 16, 8),
+    ("enc4_dec4_pts8_h4",  4, 4,  8, 4),
+]
 
-def parse_hw(value: str) -> tuple[int, int]:
-    if "," in value:
-        left, right = value.split(",", 1)
-    elif "x" in value.lower():
-        left, right = value.lower().split("x", 1)
-    else:
-        raise argparse.ArgumentTypeError("Expected H,W or HxW.")
-    return int(left), int(right)
+
+@dataclass
+class SweepConfig:
+    tag: str
+    num_encoder_layers: int
+    num_decoder_layers: int
+    num_decoder_points: int
+    num_heads_decoder: int
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Train MRPatchMultiScaleRTDETRHead: each resolution keeps its natural patch-grid "
-            "feature map; the RT-DETR decoder attends across all levels simultaneously."
-        )
-    )
+    parser = argparse.ArgumentParser(description="Sweep MRPatchMultiScaleRTDETRHead enc4 configs.")
     parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
-    parser.add_argument("--run-name", default=DEFAULT_RUN_NAME)
     parser.add_argument(
         "--backbone-checkpoint",
         default=DEFAULT_BACKBONE_CHECKPOINT,
@@ -71,26 +91,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefetch-factor", type=int, default=4)
     parser.add_argument("--full-eval-every", type=int, default=5)
     parser.add_argument("--save-last-every", type=int, default=5)
-    # Backbone architecture (must match the checkpoint if one is provided)
+    # Fixed backbone architecture
     parser.add_argument("--d-model", type=int, default=128)
     parser.add_argument("--patch-size", type=int, default=8)
-    parser.add_argument("--num-encoder-layers", type=int, default=4)
     parser.add_argument("--num-heads-backbone", type=int, default=4)
     parser.add_argument("--num-intra-points", type=int, default=8)
     parser.add_argument("--num-inter-neighbors", type=int, default=8)
     parser.add_argument("--dim-feedforward-backbone", type=int, default=512)
     parser.add_argument("--dropout", type=float, default=0.0)
-    # RT-DETR head
+    # Fixed RT-DETR head settings
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--num-queries", type=int, default=100)
-    parser.add_argument("--num-decoder-layers", type=int, default=4)
-    parser.add_argument("--num-heads-decoder", type=int, default=8)
-    parser.add_argument("--num-decoder-points", type=int, default=8)
     parser.add_argument("--dim-feedforward-decoder", type=int, default=1024)
     parser.add_argument("--matcher-num-threads", type=int, default=8)
     # Control
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--configs",
+        nargs="+",
+        default=None,
+        help="Subset of config tags to run (e.g. enc4_dec2_pts8_h8). Runs all if omitted.",
+    )
     return parser.parse_args()
 
 
@@ -104,43 +126,34 @@ def cleanup() -> None:
         torch.cuda.empty_cache()
 
 
-def main() -> None:
-    args = parse_args()
-    input_resolutions = find_input_resolutions(args.data_dir)
-    if len(input_resolutions) != len(DEFAULT_RES_KEYS):
-        raise ValueError(
-            f"Expected {len(DEFAULT_RES_KEYS)} resolutions, found {len(input_resolutions)}."
-        )
-
-    input_channels = preprocessing_num_channels(args.preprocessing)
+def train_config(
+    cfg: SweepConfig,
+    args: argparse.Namespace,
+    input_resolutions: list,
+    input_channels: int,
+) -> None:
+    output_dir = Path(args.output_root) / f"mr_patch_multiscale_rtdetr_{cfg.tag}"
     backbone_ckpt = Path(args.backbone_checkpoint)
-    output_dir = Path(args.output_root) / args.run_name
 
     num_levels = len(input_resolutions)
     patch_shapes = [(h // args.patch_size, w // args.patch_size) for h, w in input_resolutions]
     total_tokens = sum(h * w for h, w in patch_shapes)
 
-    print("MRPatchMultiScaleRTDETRHead ablation")
-    print(f"  output_dir          = {output_dir}")
-    print(f"  device              = {args.device}")
-    print(f"  backbone_checkpoint = {backbone_ckpt}  exists={backbone_ckpt.is_file()}")
-    print(f"  input_channels      = {input_channels}")
-    print(f"  epochs={args.epochs}  patience={args.patience}  lr={args.lr}")
-    print(f"  num_levels={num_levels}  total_tokens_per_image={total_tokens}")
-    print("  patch grids per resolution:")
-    for res_key, res_hw, shape in zip(DEFAULT_RES_KEYS, input_resolutions, patch_shapes):
-        print(f"    {res_key}: {res_hw} → {shape[0]}×{shape[1]} = {shape[0]*shape[1]} tokens")
-    print("  backbone:")
-    print(f"    d_model={args.d_model}  patch_size={args.patch_size}  encoder_layers={args.num_encoder_layers}")
-    print(f"    num_heads={args.num_heads_backbone}  intra_points={args.num_intra_points}  inter_neighbors={args.num_inter_neighbors}")
-    print("  RT-DETR head:")
-    print(f"    hidden_dim={args.hidden_dim}  num_queries={args.num_queries}  num_levels={num_levels}")
-    print(f"    num_decoder_layers={args.num_decoder_layers}  num_heads={args.num_heads_decoder}  num_decoder_points={args.num_decoder_points}")
+    print(f"\n{'='*70}")
+    print(f"  Config: {cfg.tag}")
+    print(f"{'='*70}")
+    print(f"  output_dir     = {output_dir}")
+    print(f"  backbone_ckpt  = {backbone_ckpt}  exists={backbone_ckpt.is_file()}")
+    print(f"  num_levels={num_levels}  total_tokens={total_tokens}")
+    print(f"  backbone: enc_layers={cfg.num_encoder_layers}  d_model={args.d_model}  patch_size={args.patch_size}")
+    print(f"  decoder:  layers={cfg.num_decoder_layers}  pts={cfg.num_decoder_points}  heads={cfg.num_heads_decoder}")
 
     if args.dry_run:
+        print("  [DRY RUN] skipping training")
         return
+
     if output_is_complete(output_dir) and not args.overwrite:
-        print(f"[SKIP] checkpoint already present in {output_dir}")
+        print(f"  [SKIP] checkpoint already present in {output_dir}")
         return
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -153,7 +166,7 @@ def main() -> None:
         in_ch=input_channels,
         d_model=args.d_model,
         patch_size=args.patch_size,
-        num_encoder_layers=args.num_encoder_layers,
+        num_encoder_layers=cfg.num_encoder_layers,
         num_heads_backbone=args.num_heads_backbone,
         num_intra_points=args.num_intra_points,
         num_inter_neighbors=args.num_inter_neighbors,
@@ -161,18 +174,18 @@ def main() -> None:
         dropout=args.dropout,
         hidden_dim=args.hidden_dim,
         num_queries=args.num_queries,
-        num_decoder_layers=args.num_decoder_layers,
-        num_heads_decoder=args.num_heads_decoder,
-        num_decoder_points=args.num_decoder_points,
+        num_decoder_layers=cfg.num_decoder_layers,
+        num_heads_decoder=cfg.num_heads_decoder,
+        num_decoder_points=cfg.num_decoder_points,
         dim_feedforward_decoder=args.dim_feedforward_decoder,
         matcher_num_threads=args.matcher_num_threads,
     )
     try:
         if backbone_ckpt.is_file():
             missing, unexpected = model.load_backbone_weights(str(backbone_ckpt), device=args.device)
-            print(f"[OK] backbone weights loaded — missing={len(missing)}  unexpected={len(unexpected)}")
+            print(f"  [OK] backbone weights loaded — missing={len(missing)}  unexpected={len(unexpected)}")
         else:
-            print("[INFO] no backbone checkpoint provided — training from scratch")
+            print("  [INFO] no backbone checkpoint — training from scratch")
 
         model.fit(
             data_dir=args.data_dir,
@@ -192,7 +205,30 @@ def main() -> None:
         del model
         cleanup()
 
-    print(f"\n[DONE] outputs: {output_dir}")
+    print(f"  [DONE] {output_dir}")
+
+
+def main() -> None:
+    args = parse_args()
+    input_resolutions = find_input_resolutions(args.data_dir)
+    if len(input_resolutions) != len(DEFAULT_RES_KEYS):
+        raise ValueError(
+            f"Expected {len(DEFAULT_RES_KEYS)} resolutions, found {len(input_resolutions)}."
+        )
+    input_channels = preprocessing_num_channels(args.preprocessing)
+
+    configs = [SweepConfig(*c) for c in SWEEP_CONFIGS]
+    if args.configs:
+        selected = set(args.configs)
+        configs = [c for c in configs if c.tag in selected]
+        if not configs:
+            raise ValueError(f"No matching configs for: {args.configs}")
+
+    print(f"MRPatchMultiScaleRTDETRHead enc4 sweep — {len(configs)} configuration(s)")
+    for cfg in configs:
+        train_config(cfg, args, input_resolutions, input_channels)
+
+    print("\n[ALL DONE]")
 
 
 if __name__ == "__main__":
