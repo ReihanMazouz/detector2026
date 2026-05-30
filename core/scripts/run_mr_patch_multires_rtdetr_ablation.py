@@ -26,7 +26,7 @@ from detector2026.core.utils.preprocess import preprocessing_num_channels  # noq
 DEFAULT_OUTPUT_ROOT = (
     "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/mr_yolo_ablation"
 )
-DEFAULT_RUN_NAME = "mr_patch_multires_rtdetr_head"
+DEFAULT_RUN_NAME = "mr_patch_multires_rtdetr_head_frozen"
 DEFAULT_BACKBONE_CHECKPOINT = (
     "/data/RAWSIM/RMA/training_folder/rf_dataset_for_real_validation/"
     "mr_yolo_ablation/mr_patch_backbone_yolo_one2many_head/best.pt"
@@ -46,8 +46,9 @@ def parse_hw(value: str) -> tuple[int, int]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Train MRPatchMultiResRTDETRHead: each resolution keeps its natural patch-grid "
-            "feature map; the RT-DETR decoder attends across all levels simultaneously."
+            "Refine the pre-trained MRPatchBackboneYOLOOne2ManyHead encoder with a multi-level "
+            "RT-DETR head. Each resolution keeps its natural patch-grid feature map; the "
+            "loaded backbone is frozen and only the RT-DETR head is trained."
         )
     )
     parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
@@ -56,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backbone-checkpoint",
         default=DEFAULT_BACKBONE_CHECKPOINT,
-        help="Optional: initialise backbone from a pre-trained MRPatchBackbone* checkpoint.",
+        help="Path to the pre-trained MRPatchBackboneYOLOOne2ManyHead best.pt.",
     )
     parser.add_argument("--device", default=DEFAULT_DEVICE)
     parser.add_argument("--num-classes", type=int, default=DEFAULT_NUM_CLASSES)
@@ -65,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     # Training schedule
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--patience", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--prefetch-factor", type=int, default=4)
@@ -83,7 +84,7 @@ def parse_args() -> argparse.Namespace:
     # RT-DETR head
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--num-queries", type=int, default=100)
-    parser.add_argument("--num-decoder-layers", type=int, default=2)
+    parser.add_argument("--num-decoder-layers", type=int, default=6)
     parser.add_argument("--num-heads-decoder", type=int, default=8)
     parser.add_argument("--num-decoder-points", type=int, default=8)
     parser.add_argument("--dim-feedforward-decoder", type=int, default=1024)
@@ -104,6 +105,16 @@ def cleanup() -> None:
         torch.cuda.empty_cache()
 
 
+def freeze_backbone(model: MRPatchMultiResRTDETRHead) -> int:
+    frozen = 0
+    for param in model.backbone.parameters():
+        param.requires_grad = False
+        frozen += param.numel()
+    model._freeze_backbone = True
+    model.backbone.eval()
+    return frozen
+
+
 def main() -> None:
     args = parse_args()
     input_resolutions = find_input_resolutions(args.data_dir)
@@ -116,11 +127,12 @@ def main() -> None:
     backbone_ckpt = Path(args.backbone_checkpoint)
     output_dir = Path(args.output_root) / args.run_name
 
-    num_levels = len(input_resolutions)
     patch_shapes = [(h // args.patch_size, w // args.patch_size) for h, w in input_resolutions]
     total_tokens = sum(h * w for h, w in patch_shapes)
 
-    print("MRPatchMultiResRTDETRHead ablation")
+    num_levels = len(input_resolutions)
+
+    print("MRPatchMultiResRTDETRHead frozen-backbone refinement")
     print(f"  output_dir          = {output_dir}")
     print(f"  device              = {args.device}")
     print(f"  backbone_checkpoint = {backbone_ckpt}  exists={backbone_ckpt.is_file()}")
@@ -133,6 +145,7 @@ def main() -> None:
     print("  backbone:")
     print(f"    d_model={args.d_model}  patch_size={args.patch_size}  encoder_layers={args.num_encoder_layers}")
     print(f"    num_heads={args.num_heads_backbone}  intra_points={args.num_intra_points}  inter_neighbors={args.num_inter_neighbors}")
+    print("    trainable=False")
     print("  RT-DETR head:")
     print(f"    hidden_dim={args.hidden_dim}  num_queries={args.num_queries}  num_levels={num_levels}")
     print(f"    num_decoder_layers={args.num_decoder_layers}  num_heads={args.num_heads_decoder}  num_decoder_points={args.num_decoder_points}")
@@ -142,6 +155,11 @@ def main() -> None:
     if output_is_complete(output_dir) and not args.overwrite:
         print(f"[SKIP] checkpoint already present in {output_dir}")
         return
+    if not backbone_ckpt.is_file():
+        raise FileNotFoundError(
+            f"Backbone checkpoint not found: {backbone_ckpt}\n"
+            "Train MRPatchBackboneYOLOOne2ManyHead first or pass --backbone-checkpoint."
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     model = MRPatchMultiResRTDETRHead(
@@ -168,11 +186,11 @@ def main() -> None:
         matcher_num_threads=args.matcher_num_threads,
     )
     try:
-        if backbone_ckpt.is_file():
-            missing, unexpected = model.load_backbone_weights(str(backbone_ckpt), device=args.device)
-            print(f"[OK] backbone weights loaded — missing={len(missing)}  unexpected={len(unexpected)}")
-        else:
-            print("[INFO] no backbone checkpoint provided — training from scratch")
+        missing, unexpected = model.load_backbone_weights(str(backbone_ckpt), device=args.device)
+        frozen_params = freeze_backbone(model)
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"[OK] backbone weights loaded — missing={len(missing)}  unexpected={len(unexpected)}")
+        print(f"[OK] backbone frozen — frozen_params={frozen_params}  trainable_params={trainable_params}")
 
         model.fit(
             data_dir=args.data_dir,

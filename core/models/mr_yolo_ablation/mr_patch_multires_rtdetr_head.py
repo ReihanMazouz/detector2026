@@ -413,6 +413,8 @@ class MRPatchMultiResRTDETRHead(BaseModel):
 
     def _run_epoch(self, loader: DataLoader, optimizer, scaler, train: bool, desc: str):
         self.train(train)
+        if getattr(self, "_freeze_backbone", False):
+            self.backbone.eval()
         total_loss = 0.0
         parts_sum = {"loss_cls": 0.0, "loss_bbox": 0.0, "loss_giou": 0.0}
         amp_enabled = scaler.is_enabled() if scaler is not None else False
