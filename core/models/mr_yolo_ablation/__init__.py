@@ -17,6 +17,10 @@ from .patch_spatial_attention_yolo import (
     MRYOLOPatchSpatialAttentionAblation,
     PatchSpatialAttentionBackbone,
 )
+from .patch_spatial_branch_cross_attention import (
+    MRYOLOPatchSpatialBranchCrossAttentionAblation,
+    PatchSpatialBranchCrossAttentionBackbone,
+)
 
 __all__ = [
     "BranchCrossAttentionBackbone",
@@ -25,9 +29,11 @@ __all__ = [
     "MRPatchSpatialAttentionBlock",
     "MRPatchBackboneYOLOOne2ManyHead",
     "MRYOLOPatchSpatialAttentionAblation",
+    "MRYOLOPatchSpatialBranchCrossAttentionAblation",
     "MRYOLOBranchCrossAttentionAblation",
     "MRYOLOInputCrossAttentionAblation",
     "PatchSpatialAttentionBackbone",
+    "PatchSpatialBranchCrossAttentionBackbone",
     "MRViTPatchDetector",
     "IsotropicRestrictedPatchBackbone",
     "MRPatchBackboneRTDETRHead",
