@@ -137,6 +137,11 @@ def parse_args() -> argparse.Namespace:
         help="Initialize from <output_dir>/best.pt before continuing training.",
     )
     parser.add_argument("--debug", action="store_true", help="Raise as soon as model activations become NaN/Inf.")
+    parser.add_argument(
+        "--detect-anomaly",
+        action="store_true",
+        help="Enable torch autograd anomaly detection around backward.",
+    )
     parser.add_argument("--no-amp", action="store_true", help="Disable automatic mixed precision.")
     parser.add_argument("--overwrite", action="store_true", help="Run even if best.pt/last.pt already exists.")
     parser.add_argument("--dry-run", action="store_true", help="Print configuration without training.")
@@ -169,6 +174,7 @@ def main() -> None:
     print(f"  width_mult = {args.width_mult}")
     print(f"  use_amp = {not args.no_amp}")
     print(f"  debug = {args.debug}")
+    print(f"  detect_anomaly = {args.detect_anomaly}")
     print(f"  grad_clip_norm = {None if args.grad_clip_norm < 0 else args.grad_clip_norm}")
     print(f"  resume_checkpoint = {resume_checkpoint}")
     print("  patch spatial attention:")
@@ -228,6 +234,7 @@ def main() -> None:
     )
     model._grad_clip_norm = None if args.grad_clip_norm < 0 else args.grad_clip_norm
     model._check_finite_after_step = bool(args.debug)
+    model._detect_anomaly = bool(args.detect_anomaly)
     try:
         if resume_checkpoint is not None:
             if not resume_checkpoint.is_file():

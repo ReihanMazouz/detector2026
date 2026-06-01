@@ -172,6 +172,12 @@ def _autocast_context(device, enabled):
         return torch.cuda.amp.autocast(enabled=True)
     return nullcontext()
 
+
+def _anomaly_context(enabled):
+    if enabled:
+        return torch.autograd.detect_anomaly(check_nan=True)
+    return nullcontext()
+
 class BaseModel(nn.Module):
     def __init__(self, device="cuda:0", output_dir="outputs"):
         super().__init__()
@@ -564,7 +570,8 @@ class BaseModel(nn.Module):
 
                 # backward avec AMP
                 scaled_loss = scaler.scale(loss)
-                scaled_loss.backward()
+                with _anomaly_context(getattr(self, "_detect_anomaly", False)):
+                    scaled_loss.backward()
                 scaler.unscale_(optimizer)
                 trainable_params = [p for p in self.parameters() if p.requires_grad and p.grad is not None]
                 grad_clip_norm = getattr(self, "_grad_clip_norm", None)
@@ -576,9 +583,31 @@ class BaseModel(nn.Module):
                         error_if_nonfinite=True,
                     )
                 except RuntimeError as exc:
+                    bad_grads = []
+                    for name, param in self.named_parameters():
+                        if param.grad is None:
+                            continue
+                        finite_mask = torch.isfinite(param.grad)
+                        if finite_mask.all():
+                            continue
+                        grad = param.grad.detach()
+                        finite = grad[finite_mask]
+                        stats = (
+                            f"finite_min={finite.min().item():.6g} finite_max={finite.max().item():.6g}"
+                            if finite.numel()
+                            else "all_grad_values_non_finite"
+                        )
+                        bad_grads.append(
+                            f"{name}: shape={tuple(grad.shape)} "
+                            f"nan={(torch.isnan(grad)).sum().item()} "
+                            f"inf={(torch.isinf(grad)).sum().item()} {stats}"
+                        )
+                        if len(bad_grads) >= 8:
+                            break
                     raise FloatingPointError(
                         "Non-finite gradient before optimizer.step: "
-                        f"loss={loss.item()} parts={loss_dict}"
+                        f"loss={loss.item()} parts={loss_dict} "
+                        f"bad_grads={bad_grads}"
                     ) from exc
                 scaler.step(optimizer)
                 scaler.update()
