@@ -143,6 +143,9 @@ class _NoOpGradScaler:
     def scale(self, loss):
         return loss
 
+    def unscale_(self, optimizer):
+        return None
+
     def step(self, optimizer):
         optimizer.step()
 
@@ -562,8 +565,31 @@ class BaseModel(nn.Module):
                 # backward avec AMP
                 scaled_loss = scaler.scale(loss)
                 scaled_loss.backward()
+                scaler.unscale_(optimizer)
+                trainable_params = [p for p in self.parameters() if p.requires_grad and p.grad is not None]
+                grad_clip_norm = getattr(self, "_grad_clip_norm", None)
+                max_norm = float(grad_clip_norm) if grad_clip_norm is not None else float("inf")
+                try:
+                    total_grad_norm = nn.utils.clip_grad_norm_(
+                        trainable_params,
+                        max_norm=max_norm,
+                        error_if_nonfinite=True,
+                    )
+                except RuntimeError as exc:
+                    raise FloatingPointError(
+                        "Non-finite gradient before optimizer.step: "
+                        f"loss={loss.item()} parts={loss_dict}"
+                    ) from exc
                 scaler.step(optimizer)
                 scaler.update()
+                if getattr(self, "_check_finite_after_step", False):
+                    for name, param in self.named_parameters():
+                        if not torch.isfinite(param).all():
+                            raise FloatingPointError(
+                                "Non-finite parameter after optimizer.step: "
+                                f"{name} grad_norm={float(total_grad_norm):.6g} "
+                                f"loss={loss.item()} parts={loss_dict}"
+                            )
                 _device_synchronize(self.device)
                 train_step_time += time.perf_counter() - step_start
 

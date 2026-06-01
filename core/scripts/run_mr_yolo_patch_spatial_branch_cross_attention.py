@@ -112,6 +112,12 @@ def parse_args() -> argparse.Namespace:
         default=1.0,
         help="Bound patch gate alpha as bound*tanh(alpha). Use a negative value to disable.",
     )
+    parser.add_argument(
+        "--grad-clip-norm",
+        type=float,
+        default=1.0,
+        help="Clip gradient norm before optimizer.step. Use a negative value to disable clipping.",
+    )
     parser.add_argument("--fusion-mode", choices=("deformable", "global"), default=DEFAULT_FUSION_MODE)
     parser.add_argument("--center-resolution-index", type=int, default=None)
     parser.add_argument("--fusion-d-model", type=int, default=DEFAULT_FUSION_D_MODEL)
@@ -163,6 +169,7 @@ def main() -> None:
     print(f"  width_mult = {args.width_mult}")
     print(f"  use_amp = {not args.no_amp}")
     print(f"  debug = {args.debug}")
+    print(f"  grad_clip_norm = {None if args.grad_clip_norm < 0 else args.grad_clip_norm}")
     print(f"  resume_checkpoint = {resume_checkpoint}")
     print("  patch spatial attention:")
     print(f"    locations = P2, P4, P5")
@@ -219,6 +226,8 @@ def main() -> None:
         fusion_dropout=args.fusion_dropout,
         debug=args.debug,
     )
+    model._grad_clip_norm = None if args.grad_clip_norm < 0 else args.grad_clip_norm
+    model._check_finite_after_step = bool(args.debug)
     try:
         if resume_checkpoint is not None:
             if not resume_checkpoint.is_file():
