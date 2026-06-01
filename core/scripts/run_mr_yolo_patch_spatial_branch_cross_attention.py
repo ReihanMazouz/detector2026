@@ -233,6 +233,7 @@ def main() -> None:
         debug=args.debug,
     )
     model._grad_clip_norm = None if args.grad_clip_norm < 0 else args.grad_clip_norm
+    model._check_nonfinite_gradients = bool(args.debug)
     model._check_finite_after_step = bool(args.debug)
     model._detect_anomaly = bool(args.detect_anomaly)
     try:
