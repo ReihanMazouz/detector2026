@@ -114,9 +114,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fusion-num-points", type=int, default=DEFAULT_FUSION_NUM_POINTS)
     parser.add_argument("--fusion-ffn-ratio", type=float, default=DEFAULT_FUSION_FFN_RATIO)
     parser.add_argument("--fusion-dropout", type=float, default=DEFAULT_FUSION_DROPOUT)
+    parser.add_argument(
+        "--resume-checkpoint",
+        default=None,
+        help="Optional checkpoint path used to initialize model weights before training.",
+    )
+    parser.add_argument(
+        "--resume-from-best",
+        action="store_true",
+        help="Initialize from <output_dir>/best.pt before continuing training.",
+    )
+    parser.add_argument("--no-amp", action="store_true", help="Disable automatic mixed precision.")
     parser.add_argument("--overwrite", action="store_true", help="Run even if best.pt/last.pt already exists.")
     parser.add_argument("--dry-run", action="store_true", help="Print configuration without training.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.resume_from_best and args.resume_checkpoint is not None:
+        raise ValueError("Use either --resume-from-best or --resume-checkpoint, not both.")
+    return args
 
 
 def main() -> None:
@@ -130,6 +144,9 @@ def main() -> None:
 
     input_channels = preprocessing_num_channels(args.preprocessing)
     output_dir = Path(args.output_dir_parent) / args.run_name
+    resume_checkpoint = Path(args.resume_checkpoint) if args.resume_checkpoint else None
+    if args.resume_from_best:
+        resume_checkpoint = output_dir / "best.pt"
 
     print("MRYOLOPatchSpatialBranchCrossAttentionAblation")
     print(f"  output_dir = {output_dir}")
@@ -137,6 +154,8 @@ def main() -> None:
     print(f"  preprocessing = {args.preprocessing}")
     print(f"  input_channels = {input_channels}")
     print(f"  width_mult = {args.width_mult}")
+    print(f"  use_amp = {not args.no_amp}")
+    print(f"  resume_checkpoint = {resume_checkpoint}")
     print("  patch spatial attention:")
     print(f"    locations = P2, P4, P5")
     print(f"    patch_size = {tuple(args.patch_size)}")
@@ -158,7 +177,7 @@ def main() -> None:
 
     if args.dry_run:
         return
-    if output_is_complete(output_dir) and not args.overwrite:
+    if output_is_complete(output_dir) and not args.overwrite and resume_checkpoint is None:
         print(f"[SKIP] checkpoint deja present dans {output_dir}")
         return
 
@@ -190,6 +209,16 @@ def main() -> None:
         fusion_dropout=args.fusion_dropout,
     )
     try:
+        if resume_checkpoint is not None:
+            if not resume_checkpoint.is_file():
+                raise FileNotFoundError(f"Resume checkpoint not found: {resume_checkpoint}")
+            state_dict = torch.load(resume_checkpoint, map_location=args.device)
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            print(
+                f"[OK] resumed weights from {resume_checkpoint} "
+                f"(missing={len(missing)} unexpected={len(unexpected)})"
+            )
+
         model.fit(
             data_dir=args.data_dir,
             epochs=args.epochs,
@@ -203,6 +232,7 @@ def main() -> None:
             full_eval_every=args.full_eval_every,
             save_last_every=args.save_last_every,
             monitor=args.monitor,
+            use_amp=not args.no_amp,
         )
     finally:
         del model
