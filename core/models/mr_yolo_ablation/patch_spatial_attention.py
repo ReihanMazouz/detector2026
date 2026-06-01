@@ -93,6 +93,7 @@ class MRPatchSpatialAttentionBlock(nn.Module):
         num_points: int = 16,
         mlp_ratio: float = 2.0,
         dropout: float = 0.0,
+        alpha_bound: float | None = None,
     ):
         super().__init__()
         if not (len(input_channels) == len(input_resolutions) == len(patch_sizes)):
@@ -137,6 +138,7 @@ class MRPatchSpatialAttentionBlock(nn.Module):
         self.output_norm = nn.LayerNorm(d_model)
         self.spatial_heads = nn.ModuleList(nn.Linear(d_model, 1) for _ in self.input_channels)
         self.alpha = nn.Parameter(torch.zeros(self.num_resolutions))
+        self.alpha_bound = None if alpha_bound is None else float(alpha_bound)
 
     def _validate_inputs(self, features: Sequence[torch.Tensor]) -> None:
         if len(features) != self.num_resolutions:
@@ -173,5 +175,8 @@ class MRPatchSpatialAttentionBlock(nn.Module):
             attn = head(x[:, index]).transpose(1, 2).reshape(batch, 1, height, width)
             attn = F.interpolate(attn, size=feature.shape[-2:], mode="bilinear", align_corners=False)
             gate = 2.0 * torch.sigmoid(attn) - 1.0
-            outputs.append(feature + self.alpha[index].to(dtype=feature.dtype) * gate * feature)
+            alpha = self.alpha[index].to(dtype=feature.dtype)
+            if self.alpha_bound is not None:
+                alpha = self.alpha_bound * torch.tanh(alpha)
+            outputs.append(feature + alpha * gate * feature)
         return outputs

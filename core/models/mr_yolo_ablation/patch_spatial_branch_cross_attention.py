@@ -53,6 +53,7 @@ class PatchSpatialBranchCrossAttentionBackbone(nn.Module):
         patch_num_points: int = 16,
         patch_ffn_ratio: float = 2.0,
         patch_dropout: float = 0.0,
+        patch_alpha_bound: float | None = 1.0,
         fusion_mode: str = "deformable",
         center_resolution_index: int | None = None,
         fusion_d_model: int = 128,
@@ -61,6 +62,7 @@ class PatchSpatialBranchCrossAttentionBackbone(nn.Module):
         fusion_num_points: int = 4,
         fusion_ffn_ratio: float = 2.0,
         fusion_dropout: float = 0.0,
+        debug: bool = False,
     ):
         super().__init__()
         if not input_resolutions:
@@ -68,6 +70,7 @@ class PatchSpatialBranchCrossAttentionBackbone(nn.Module):
 
         self.input_resolutions = list(input_resolutions)
         self.patch_size = tuple(int(v) for v in patch_size)
+        self.debug = bool(debug)
         self.last_forward_features = []
         self.branches = nn.ModuleList(
             [
@@ -96,6 +99,7 @@ class PatchSpatialBranchCrossAttentionBackbone(nn.Module):
                 num_points=patch_num_points,
                 mlp_ratio=patch_ffn_ratio,
                 dropout=patch_dropout,
+                alpha_bound=patch_alpha_bound,
             )
             for channels, resolution in zip(p2_channels, p2_resolutions)
         )
@@ -157,6 +161,7 @@ class PatchSpatialBranchCrossAttentionBackbone(nn.Module):
             num_points=patch_num_points,
             mlp_ratio=patch_ffn_ratio,
             dropout=patch_dropout,
+            alpha_bound=patch_alpha_bound,
         )
         self.attn_p5 = MRPatchSpatialAttentionBlock(
             input_channels=[c5],
@@ -168,7 +173,28 @@ class PatchSpatialBranchCrossAttentionBackbone(nn.Module):
             num_points=patch_num_points,
             mlp_ratio=patch_ffn_ratio,
             dropout=patch_dropout,
+            alpha_bound=patch_alpha_bound,
         )
+
+    def _check_finite(self, name: str, tensor: torch.Tensor) -> None:
+        if not self.debug:
+            return
+        if not torch.isfinite(tensor).all():
+            detached = tensor.detach()
+            finite = detached[torch.isfinite(detached)]
+            if finite.numel():
+                stats = (
+                    f"min={finite.min().item():.6g} "
+                    f"max={finite.max().item():.6g} "
+                    f"mean={finite.mean().item():.6g}"
+                )
+            else:
+                stats = "all values are non-finite"
+            raise RuntimeError(f"Non-finite tensor after {name}: shape={tuple(tensor.shape)} {stats}")
+
+    def _check_finite_sequence(self, name: str, tensors: Sequence[torch.Tensor]) -> None:
+        for index, tensor in enumerate(tensors):
+            self._check_finite(f"{name}[{index}]", tensor)
 
     def _resolve_stage_indices(self) -> list[tuple[int, int]]:
         indices = []
@@ -237,20 +263,28 @@ class PatchSpatialBranchCrossAttentionBackbone(nn.Module):
 
         p2_targets = [indices[0] for indices in self.stage_indices]
         states, positions = self._run_to(states, positions, p2_targets)
+        self._check_finite_sequence("raw_p2", states)
         p2s = [attn([state])[0] for attn, state in zip(self.attn_p2, states)]
+        self._check_finite_sequence("attn_p2", p2s)
         states = p2s
 
         p3_targets = [indices[1] for indices in self.stage_indices]
         p3s, positions = self._run_to(states, positions, p3_targets)
+        self._check_finite_sequence("raw_p3", p3s)
         self.last_forward_features = [None, tuple(p2s), tuple(p3s)]
 
         p3 = self.c3_p3(self.fuse_p3(p3s))
+        self._check_finite("fused_p3", p3)
         p4 = self.c3_p4(self.conv_p4(p3))
+        self._check_finite("raw_p4", p4)
         p4 = self.attn_p4([p4])[0]
+        self._check_finite("attn_p4", p4)
         p5 = self.conv_p5(p4)
         p5 = self.c3_p5(p5)
         p5 = self.sppf(p5)
+        self._check_finite("raw_p5", p5)
         p5 = self.attn_p5([p5])[0]
+        self._check_finite("attn_p5", p5)
         return p3, p4, p5
 
 
@@ -275,6 +309,7 @@ class MRYOLOPatchSpatialBranchCrossAttentionAblation(BaseModel):
         patch_num_points: int = 16,
         patch_ffn_ratio: float = 2.0,
         patch_dropout: float = 0.0,
+        patch_alpha_bound: float | None = 1.0,
         fusion_mode: str = "deformable",
         center_resolution_index: int | None = None,
         fusion_d_model: int = 128,
@@ -307,6 +342,7 @@ class MRYOLOPatchSpatialBranchCrossAttentionAblation(BaseModel):
             patch_num_points=patch_num_points,
             patch_ffn_ratio=patch_ffn_ratio,
             patch_dropout=patch_dropout,
+            patch_alpha_bound=patch_alpha_bound,
             fusion_mode=fusion_mode,
             center_resolution_index=center_resolution_index,
             fusion_d_model=fusion_d_model,
@@ -315,6 +351,7 @@ class MRYOLOPatchSpatialBranchCrossAttentionAblation(BaseModel):
             fusion_num_points=fusion_num_points,
             fusion_ffn_ratio=fusion_ffn_ratio,
             fusion_dropout=fusion_dropout,
+            debug=debug,
         )
         c3, c4, c5 = self.backbone.out_channels
 
@@ -382,4 +419,11 @@ class MRYOLOPatchSpatialBranchCrossAttentionAblation(BaseModel):
         p3_out = self.head_c3_2(torch.cat([self.upsample(p4_out), p3], dim=1))
         p4_out2 = self.head_c3_3(torch.cat([self.down_p3(p3_out), p4_out], dim=1))
         p5_out = self.head_c3_4(torch.cat([self.down_p4(p4_out2), p5], dim=1))
-        return self.detect(p3_out, p4_out2, p5_out)
+        outputs = self.detect(p3_out, p4_out2, p5_out)
+        if self.debug:
+            dist_out, clsobj_out = outputs
+            for index, tensor in enumerate(dist_out):
+                self.backbone._check_finite(f"detect_dist[{index}]", tensor)
+            for index, tensor in enumerate(clsobj_out):
+                self.backbone._check_finite(f"detect_clsobj[{index}]", tensor)
+        return outputs

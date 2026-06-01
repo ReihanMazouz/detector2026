@@ -106,6 +106,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patch-num-points", type=int, default=DEFAULT_PATCH_NUM_POINTS)
     parser.add_argument("--patch-ffn-ratio", type=float, default=DEFAULT_PATCH_FFN_RATIO)
     parser.add_argument("--patch-dropout", type=float, default=DEFAULT_PATCH_DROPOUT)
+    parser.add_argument(
+        "--patch-alpha-bound",
+        type=float,
+        default=1.0,
+        help="Bound patch gate alpha as bound*tanh(alpha). Use a negative value to disable.",
+    )
     parser.add_argument("--fusion-mode", choices=("deformable", "global"), default=DEFAULT_FUSION_MODE)
     parser.add_argument("--center-resolution-index", type=int, default=None)
     parser.add_argument("--fusion-d-model", type=int, default=DEFAULT_FUSION_D_MODEL)
@@ -124,6 +130,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Initialize from <output_dir>/best.pt before continuing training.",
     )
+    parser.add_argument("--debug", action="store_true", help="Raise as soon as model activations become NaN/Inf.")
     parser.add_argument("--no-amp", action="store_true", help="Disable automatic mixed precision.")
     parser.add_argument("--overwrite", action="store_true", help="Run even if best.pt/last.pt already exists.")
     parser.add_argument("--dry-run", action="store_true", help="Print configuration without training.")
@@ -155,6 +162,7 @@ def main() -> None:
     print(f"  input_channels = {input_channels}")
     print(f"  width_mult = {args.width_mult}")
     print(f"  use_amp = {not args.no_amp}")
+    print(f"  debug = {args.debug}")
     print(f"  resume_checkpoint = {resume_checkpoint}")
     print("  patch spatial attention:")
     print(f"    locations = P2, P4, P5")
@@ -163,6 +171,7 @@ def main() -> None:
     print(f"    num_heads = {args.patch_num_heads}")
     print(f"    num_layers = {args.patch_num_layers}")
     print(f"    num_points = {args.patch_num_points}")
+    print(f"    alpha_bound = {None if args.patch_alpha_bound < 0 else args.patch_alpha_bound}")
     print("  branch cross-attention fusion:")
     print(f"    location = P3")
     print(f"    mode = {args.fusion_mode}")
@@ -199,6 +208,7 @@ def main() -> None:
         patch_num_points=args.patch_num_points,
         patch_ffn_ratio=args.patch_ffn_ratio,
         patch_dropout=args.patch_dropout,
+        patch_alpha_bound=None if args.patch_alpha_bound < 0 else args.patch_alpha_bound,
         fusion_mode=args.fusion_mode,
         center_resolution_index=args.center_resolution_index,
         fusion_d_model=args.fusion_d_model,
@@ -207,6 +217,7 @@ def main() -> None:
         fusion_num_points=args.fusion_num_points,
         fusion_ffn_ratio=args.fusion_ffn_ratio,
         fusion_dropout=args.fusion_dropout,
+        debug=args.debug,
     )
     try:
         if resume_checkpoint is not None:

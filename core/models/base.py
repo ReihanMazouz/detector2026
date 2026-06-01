@@ -534,6 +534,25 @@ class BaseModel(nn.Module):
                     pred_scores = torch.cat([x.flatten(2).permute(0, 2, 1) for x in clsobj_out], dim=1)
                     pred_distri = torch.cat([x.flatten(2).permute(0, 2, 1) for x in dist_out], dim=1)
                     loss, loss_dict, debug_data = criterion(pred_distri, pred_scores, batch, feats=feats)
+                    if not torch.isfinite(loss):
+                        pred_scores_finite = pred_scores[torch.isfinite(pred_scores)]
+                        pred_distri_finite = pred_distri[torch.isfinite(pred_distri)]
+                        score_stats = (
+                            f"min={pred_scores_finite.min().item():.6g} max={pred_scores_finite.max().item():.6g}"
+                            if pred_scores_finite.numel()
+                            else "all non-finite"
+                        )
+                        distr_stats = (
+                            f"min={pred_distri_finite.min().item():.6g} max={pred_distri_finite.max().item():.6g}"
+                            if pred_distri_finite.numel()
+                            else "all non-finite"
+                        )
+                        raise FloatingPointError(
+                            "Non-finite YOLO loss before optimizer.step: "
+                            f"loss={loss.item()} parts={loss_dict} "
+                            f"pred_scores({score_stats}) pred_distri({distr_stats}) "
+                            f"num_targets={int(targets.shape[0])}"
+                        )
 
                 loss_box_train += loss_dict[0]
                 loss_cls_train += loss_dict[1]
@@ -633,6 +652,12 @@ class BaseModel(nn.Module):
                             pred_scores = torch.cat([x.flatten(2).permute(0, 2, 1) for x in clsobj_out], dim=1)
                             pred_distri = torch.cat([x.flatten(2).permute(0, 2, 1) for x in dist_out], dim=1)
                             val_loss_batch, loss_dict_val, _ = criterion(pred_distri, pred_scores, batch, feats=feats)
+                            if not torch.isfinite(val_loss_batch):
+                                raise FloatingPointError(
+                                    "Non-finite YOLO validation loss: "
+                                    f"loss={val_loss_batch.item()} parts={loss_dict_val} "
+                                    f"num_targets={int(targets.shape[0])}"
+                                )
                         _device_synchronize(self.device)
                         val_step_time += time.perf_counter() - step_start
 
