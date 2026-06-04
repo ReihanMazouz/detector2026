@@ -23,13 +23,16 @@ from detector2026.core.models.tf_attn_yolo import TF_Attn_Yolo  # noqa: E402
 from detector2026.core.models.yolov8 import YOLOv8  # noqa: E402
 from detector2026.core.models.mr_yolo_ablation import (  # noqa: E402
     MRPatchBackboneYOLOOne2ManyHead,
-    MRYOLOBranchCrossAttentionAblation,
     MRViTPatchDetector,
+    MRYOLOBranchCrossAttentionAblation,
+    MRYOLOPatchSpatialBranchCrossAttentionAblation,
+    MRYOLOPatchSpatialBranchCrossAttentionRTDETRHead,
 )
 from detector2026.core.models.yolov11 import YOLOv11  # noqa: E402
 from detector2026.core.models.yolov11_ablation import (  # noqa: E402
     YOLOv11DATBackbone,
     YOLOv11NoNeck,
+    YOLOv11P2P5Neck,
     YOLOv11P3Direct,
     YOLOv11P3RTDETR,
     YOLOv11RTDETR,
@@ -500,6 +503,33 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
         in_ch=input_channels,
         width_mult=args.width_mult,
     )
+    patch_branch_common = dict(
+        input_resolutions=input_resolutions,
+        output_dir=None,
+        num_classes=args.num_classes,
+        reg_max=args.reg_max,
+        device=args.device,
+        in_ch=input_channels,
+        width_mult=args.width_mult,
+        outfusion_channels_mult=2,
+        constant_backbone_ch=0,
+        patch_size=(8, 8),
+        patch_d_model=128,
+        patch_num_heads=4,
+        patch_num_layers=1,
+        patch_num_points=16,
+        patch_ffn_ratio=2.0,
+        patch_dropout=0.0,
+        patch_alpha_bound=1.0,
+        fusion_mode="deformable",
+        center_resolution_index=None,
+        fusion_d_model=128,
+        fusion_num_heads=4,
+        fusion_num_layers=1,
+        fusion_num_points=4,
+        fusion_ffn_ratio=2.0,
+        fusion_dropout=0.0,
+    )
 
     def ckpt(root: Path, name: str) -> Path:
         return root / name / "best.pt"
@@ -618,7 +648,129 @@ def build_specs(args: argparse.Namespace) -> list[EvalSpec]:
             )
         )
 
+    requested_specs = [
+        EvalSpec(
+            "yolov11_one2one_deformable",
+            "one2one",
+            Path(
+                "/data/RAWSIM/RMA//training_folder/yolov11n_ablation/"
+                "yolov11n_best_ft_rtdetr_head_one2one_deformable/best.pt"
+            ),
+            "specificres",
+            lambda output_dir: YOLOv11RTDETRHead(
+                output_dir=output_dir,
+                num_decoder_points=8,
+                use_deformable_attention=True,
+                **yolo_common,
+                **rtdetr_common,
+            ),
+        ),
+        EvalSpec(
+            "yolov11_p2_to_p5",
+            "yolo",
+            Path("/data/RAWSIM/RMA//training_folder/yolov11n_ablation/yolov11n_p2p5_neck/best.pt"),
+            "specificres",
+            lambda output_dir: YOLOv11P2P5Neck(output_dir=output_dir, **yolo_common),
+        ),
+        EvalSpec(
+            "yolov11n_no_neck",
+            "yolo",
+            Path(
+                "/data/RAWSIM/RMA//training_folder/yolov11n_ablation/"
+                "yolov11n_no_neck_direct_p3p4p5/best.pt"
+            ),
+            "specificres",
+            lambda output_dir: YOLOv11NoNeck(output_dir=output_dir, **yolo_common),
+        ),
+        EvalSpec(
+            "mr_patch_backbone_one2many_heand",
+            "mr_yolo",
+            Path(
+                "/data/RAWSIM/RMA//training_folder/rf_dataset_for_real_validation/mr_yolo_ablation/"
+                "mr_patch_backbone_yolo_one2many_head/best.pt"
+            ),
+            "fused",
+            lambda output_dir: MRPatchBackboneYOLOOne2ManyHead(
+                input_resolutions=input_resolutions,
+                output_dir=output_dir,
+                num_classes=args.num_classes,
+                reg_max=args.reg_max,
+                device=args.device,
+                in_ch=input_channels,
+                d_model=128,
+                patch_size=8,
+                num_encoder_layers=3,
+                num_heads=4,
+                num_intra_points=8,
+                num_inter_neighbors=8,
+                dim_feedforward=512,
+                dropout=0.0,
+                p3_hw=(32, 32),
+                stride=32,
+            ),
+        ),
+        EvalSpec(
+            "mr_vit_patch_detector_rtdetr",
+            "one2one",
+            Path(
+                "/data/RAWSIM/RMA//training_folder/rf_dataset_for_real_validation/mr_yolo_ablation/"
+                "mr_vit_batch_detector_rtdetr/best.pt"
+            ),
+            "fused",
+            lambda output_dir: MRViTPatchDetector(
+                input_resolutions=input_resolutions,
+                output_dir=output_dir,
+                num_classes=args.num_classes,
+                device=args.device,
+                in_ch=input_channels,
+                d_model=256,
+                num_encoder_layers=6,
+                num_decoder_layers=6,
+                num_queries=100,
+                patch_grid_hw=(32, 32),
+                num_heads=8,
+                num_encoder_points=16,
+                num_decoder_points=16,
+                dim_feedforward=1024,
+                dropout=0.0,
+                matcher_num_threads=8,
+            ),
+        ),
+        EvalSpec(
+            "mr_yolo_patch_p2p4p5_branch_cross_attention",
+            "mr_yolo",
+            Path(
+                "/data/RAWSIM/RMA//training_folder/rf_dataset_for_real_validation/mr_yolo_ablation/"
+                "mr_yolo_patch_p2p4p5_branch_cross_attention/best.pt"
+            ),
+            "fused",
+            lambda output_dir: MRYOLOPatchSpatialBranchCrossAttentionAblation(
+                **{**patch_branch_common, "output_dir": output_dir}
+            ),
+        ),
+        EvalSpec(
+            "mr_yolo_patch_p2p4p5_branch_cross_attention_rtdetr_head",
+            "one2one",
+            Path(
+                "/data/RAWSIM/RMA//training_folder/rf_dataset_for_real_validation/mr_yolo_ablation/"
+                "mr_yolo_patch_p2p4p5_branch_cross_attention_rtdetr_head/best.pt"
+            ),
+            "fused",
+            lambda output_dir: MRYOLOPatchSpatialBranchCrossAttentionRTDETRHead(
+                **{**patch_branch_common, "output_dir": output_dir},
+                hidden_dim=128,
+                num_queries=100,
+                num_decoder_layers=6,
+                num_heads_decoder=8,
+                num_decoder_points=8,
+                dim_feedforward_decoder=1024,
+                matcher_num_threads=8,
+            ),
+        ),
+    ]
+
     return [
+        *requested_specs,
         EvalSpec(
             "YOLOv11_baseline",
             "yolo",
